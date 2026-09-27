@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""Play one bot against others on every map, from both sides, and tally the results.
-
-    python3 tools/arena.py bot starter loong            # all ladder + bundled maps
-    python3 tools/arena.py bot bot_old --maps maps/ladder -j 8 --seeds 2
-
-Replays go to replays/arena/ so tools/deaths.py can read them afterwards.
-"""
 import argparse, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict

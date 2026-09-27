@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""Copy the bot bot with some knobs changed, for head-to-head testing.
-
-    python3 tools/variant.py v_late feed_start_small=360,feed_start_big=330
-"""
 import re, shutil, sys
 from pathlib import Path
 

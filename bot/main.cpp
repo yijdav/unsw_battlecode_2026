@@ -1,13 +1,3 @@
-// bot: swarm-then-feed bot for UNSW Battlecode 2026.
-//
-// Strategy (from replays of the top ladder teams):
-//   1. Swarm (round < FEED_START): every dragon splits 2 off its tail as soon as it reaches
-//      length 4, spreads out and harvests pearls. Small dragons ram long enemy heads, since a
-//      head-on kills both regardless of length.
-//   2. Feed (round >= FEED_START): the longest dragon (agreed by sonar gossip) becomes the
-//      champion and plays safe. Everyone else walks to it and suicides next to it, dropping
-//      ceil(L/2) pearls for it to eat. The longest living dragon wins at round 500.
-
 #include "helper.hpp"
 
 #include <algorithm>
@@ -24,21 +14,20 @@ namespace {
 
 constexpr int R = unswbc::Constants::VISION_RADIUS;
 constexpr int VS = unswbc::Constants::VISION_SIZE;
-constexpr int STALE = 20;          // rounds a sonar report stays trusted
-constexpr int PEARL_MEMORY = 40;   // rounds a remembered pearl stays a target
+constexpr int STALE = 20;
+constexpr int PEARL_MEMORY = 40;
 constexpr int INF = 1 << 20;
 
-// Tunable knobs, kept together so they're easy to experiment with.
 struct Knobs {
-    int feed_start_small = 320;    // maps under 2048 tiles
+    int feed_start_small = 320;
     int feed_start_big = 290;
-    int split_at = 4;              // split 2 off the tail once this long
-    int feed_last_round = 494;     // later suicides can't be eaten in time
-    int crowded_pearls = 3;        // pearls already near the champion before feeders wait
-    bool escape_split = true;      // a trapped dragon splits so its tail end can walk out
-    double explore_value = 0.3;    // pull towards unseen tiles
-    double fountain_value = 0.7;   // pull towards known fountain tiles (0 disables)
-    bool cycle_test = false;       // corridors with no loop count as traps however big
+    int split_at = 4;
+    int feed_last_round = 494;
+    int crowded_pearls = 3;
+    bool escape_split = true;
+    double explore_value = 0.3;
+    double fountain_value = 0.7;
+    bool cycle_test = false;
 } K;
 
 int W, H, N;
@@ -65,19 +54,16 @@ inline int wrapd(int a, int b, int m) { int d = std::abs(a - b); return std::min
 inline int manhattan(int a, int b) { return wrapd(cx(a), cx(b), W) + wrapd(cy(a), cy(b), H); }
 inline int chebyshev(int a, int b) { return std::max(wrapd(cx(a), cx(b), W), wrapd(cy(a), cy(b), H)); }
 
-// ---- map memory (per dragon process; children start blank) ----
-// edge_n[c]: north edge of tile c, edge_w[c]: west edge. 0 empty/unknown, 1 kelp, 2 portal.
 std::vector<uint8_t> edge_n, edge_w;
-std::vector<int> portal_n, portal_w;   // portal id on that edge
-std::vector<int> pearl_seen;           // round a pearl was last seen here, -1 none
-std::vector<int> spawn_at;             // round this tile next tries to spawn, -1 unknown/never
-std::vector<int> seen_round;           // last round this tile was in view, -1 never
-std::vector<uint8_t> quick_seen;       // times we've seen this tile's countdown at 0 or 1
-std::vector<int> quick_round;          // last round that happened (count each round once)
+std::vector<int> portal_n, portal_w;
+std::vector<int> pearl_seen;
+std::vector<int> spawn_at;
+std::vector<int> seen_round;
+std::vector<uint8_t> quick_seen;
+std::vector<int> quick_round;
 struct PortalEnd { int cell; bool north; };
 std::unordered_map<int, std::vector<PortalEnd>> portals;
 
-// ---- per-turn occupancy ----
 std::vector<int> occ_stamp, occ_id, self_seg;
 std::vector<uint8_t> occ_head, occ_enemy;
 int stamp = 0;
@@ -89,9 +75,6 @@ void remember_portal(int id, int cell, bool north) {
     ends.push_back({cell, north});
 }
 
-// Where one step from c in direction d lands, from memory. -1 for kelp or an unknown portal.
-// Portal semantics follow the Loong Game's replay-verified engine reconstruction: the partner
-// edge is crossed in the same direction.
 int step(int c, int d, bool* via_portal = nullptr) {
     uint8_t kind; int pid; int key; bool north;
     switch (d) {
@@ -112,13 +95,12 @@ int step(int c, int d, bool* via_portal = nullptr) {
         if (e.cell == key && e.north == north) continue;
         return (d == 0 || d == 3) ? adj(e.cell, d) : e.cell;
     }
-    return -1;  // partner not seen yet
+    return -1;
 }
 
-// ---- sonar gossip ----
 struct Report { int len, cell, round; };
 std::unordered_map<int, Report> reports;
-constexpr uint64_t TAG = 0x2A7;  // 10 bits
+constexpr uint64_t TAG = 0x2A7;
 
 uint8_t checksum(uint64_t body) {
     uint64_t h = body * 0x9E3779B97F4A7C15ull;
@@ -141,7 +123,6 @@ bool decode(uint64_t m, int& id, Report& r) {
     r.round = int((m >> 8) & 511);
     return true;
 }
-// Best = longest fresh report, ties to the lowest id.
 int best_id() {
     int best = -1; Report const* br = nullptr;
     for (auto const& [id, r] : reports) {
@@ -151,8 +132,7 @@ int best_id() {
     return best;
 }
 
-// ---- body tracking ----
-std::deque<int> history;  // head cells, most recent first
+std::deque<int> history;
 
 struct Enemy { int head, len; };
 
@@ -165,12 +145,10 @@ struct Plan {
 };
 
 std::vector<int> dist;
-double decay[256];  // 0.88^(k-1): value of a target k steps away
+double decay[256];
 
-// Time-aware BFS from `start` (reached at step 1). My own segment s (0 = head) is free once
-// the tail has advanced past it. Returns reachable-cell count, capped.
-int bfs_depth = 0;  // deepest shortest-path distance reached by the last bfs()
-bool bfs_cycle = false;  // whether the region the last bfs() explored contains a loop
+int bfs_depth = 0;
+bool bfs_cycle = false;
 int bfs(int start, int length, int cap) {
     std::fill(dist.begin(), dist.end(), INF);
     static std::vector<int> queue; queue.clear();
@@ -193,7 +171,6 @@ int bfs(int start, int length, int cap) {
             dist[n] = t; queue.push_back(n);
         }
     }
-    // Every node but the root sees its parent once as a back edge; anything more is a loop.
     bfs_cycle = bfs_depth == INF || back_edges > count - 1;
     return count;
 }
@@ -215,7 +192,6 @@ void turn(unswbc::Controller& ct) {
     int const feed_start = (N >= 2048) ? K.feed_start_big : K.feed_start_small;
     bool const feed_phase = round_num >= feed_start;
 
-    // ---- read vision into memory ----
     std::unordered_map<int, int> seg_count;
     std::vector<int> friend_heads, visible_cells;
     std::vector<Enemy> enemies;
@@ -238,7 +214,6 @@ void turn(unswbc::Controller& ct) {
         seen_round[c] = round_num;
         int pt = t.get_pearl_time();
         spawn_at[c] = pt >= 0 ? round_num + pt : -1;
-        // Fountains (tiles with a tiny spawn gap) keep showing a countdown of 0 or 1.
         if (pt >= 0 && pt <= 1 && quick_round[c] != round_num) {
             quick_round[c] = round_num;
             if (quick_seen[c] < 255) ++quick_seen[c];
@@ -257,7 +232,6 @@ void turn(unswbc::Controller& ct) {
         else friend_heads.push_back(c);
     }
 
-    // ---- my body order: chain from head through vision, then history beyond it ----
     history.push_front(head);
     while ((int)history.size() > L) history.pop_back();
     {
@@ -266,7 +240,7 @@ void turn(unswbc::Controller& ct) {
         while ((int)chain.size() < L) {
             int nxt = -1;
             for (int d = 0; d < 4 && nxt < 0; ++d) {
-                int n = adj(cur, d);  // body links never cross portals in-window reliably; adjacency is enough
+                int n = adj(cur, d);
                 if (!occupied(n) || occ_id[n] != my_id || occ_head[n]) continue;
                 if (std::find(chain.begin(), chain.end(), n) != chain.end()) continue;
                 auto const* t = ct.get_tile(unswbc::Position(cx(n), cy(n)));
@@ -278,21 +252,18 @@ void turn(unswbc::Controller& ct) {
             chain.push_back(nxt); cur = nxt;
         }
         for (int s = 0; s < (int)chain.size(); ++s) self_seg[chain[s]] = s;
-        // Extend with history for segments outside the window, if history agrees with the chain.
         if ((int)history.size() == L && history[chain.size() - 1] == chain.back()) {
             for (int s = (int)chain.size(); s < L; ++s) {
                 int c = history[s];
                 if (!occupied(c)) { occ_stamp[c] = stamp; occ_id[c] = my_id; occ_head[c] = 0; occ_enemy[c] = 0; self_seg[c] = s; }
             }
         }
-        // Anything else of mine in view (unknown order) stays blocked forever.
         for (int c : visible_cells)
             if (occupied(c) && occ_id[c] == my_id && self_seg[c] < 0 && !occ_head[c]) self_seg[c] = -1;
     }
     int tail = -1;
     for (int c : visible_cells) if (occupied(c) && occ_id[c] == my_id && self_seg[c] == L - 1) tail = c;
 
-    // ---- gossip in ----
     for (uint64_t m : ct.get_sonar_messages()) {
         int id; Report r;
         if (!decode(m, id, r) || id == my_id) continue;
@@ -300,7 +271,6 @@ void turn(unswbc::Controller& ct) {
         if (it == reports.end() || r.round >= it->second.round) reports[id] = r;
     }
     reports[my_id] = {L, head, round_num};
-    // A visible dragon's head gives an exact, fresh position for its report.
     for (int c : friend_heads) {
         auto it = reports.find(occ_id[c]);
         if (it != reports.end()) { it->second.cell = c; it->second.round = round_num; it->second.len = std::max(it->second.len, seg_count[occ_id[c]]); }
@@ -317,8 +287,6 @@ void turn(unswbc::Controller& ct) {
         for (int c : friend_heads) if (occ_id[c] == champ) { champ_head = c; champ_visible = true; }
     }
 
-    // ---- roles ----
-    // H hunter target: a long enemy head in view (champions never hunt).
     int hunt = -1;
     if (!am_champion) {
         int best_len = 0;
@@ -326,27 +294,24 @@ void turn(unswbc::Controller& ct) {
             if (e.len >= std::max(5, L + 2) && e.len > best_len) { best_len = e.len; hunt = e.head; }
     }
 
-    // ---- feeder suicide ----
     if (feed_phase && !am_champion && champ_visible && hunt < 0 && round_num <= K.feed_last_round &&
         chebyshev(head, champ_head) <= 2) {
         int near = 0;
         for (int c : visible_cells) if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3) ++near;
         if (near < K.crowded_pearls) {
             ct.set_indicator_string("feed");
-            return;  // no action = suicide; our pearls drop beside the champion
+            return;
         }
     }
 
-    // ---- targets ----
     struct Target { int cell; double value; int not_before; };
     std::vector<Target> targets;
     auto pearl_value = [&](int c) -> double {
         if (feed_phase && !am_champion) {
-            if (champ_head >= 0 && chebyshev(c, champ_head) <= 4) return 0;  // leave it for the champion
-            return (L % 2 == 0) ? 0.5 : 0.1;  // eating at even length returns fully when we die
+            if (champ_head >= 0 && chebyshev(c, champ_head) <= 4) return 0;
+            return (L % 2 == 0) ? 0.5 : 0.1;
         }
         double v = 1.0;
-        // Don't all chase the same pearl: yield it to a closer visible friend.
         int mine = manhattan(head, c);
         for (int f : friend_heads) if (manhattan(f, c) < mine) { v = 0.35; break; }
         return v;
@@ -360,7 +325,6 @@ void turn(unswbc::Controller& ct) {
             if (v > 0) targets.push_back({c, v, spawn_at[c] - round_num});
         }
     }
-    // Fountains are worth hanging round even when empty: they refill every round or so.
     if (K.fountain_value > 0) {
         for (int c = 0; c < N; ++c) {
             if (quick_seen[c] < 3 || occupied(c) || pearl_seen[c] == round_num) continue;
@@ -375,31 +339,27 @@ void turn(unswbc::Controller& ct) {
         for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0}); }
         for (int d = 0; d < 4; ++d) { int n = adj(adj(champ_head, d), d); targets.push_back({n, 2.5, 0}); }
     }
-    // Explore: tiles never seen, then tiles not seen for a while. (Pearls sit where we aren't.)
     if (!am_champion || targets.empty()) {
         for (int c = 0; c < N; ++c) {
             if (seen_round[c] < 0) targets.push_back({c, K.explore_value, 0});
             else if (seen_round[c] < round_num - 80) targets.push_back({c, 0.5 * K.explore_value, 0});
         }
     }
-    // Fallback waypoint, redrawn on arrival or every 40 rounds.
     if (waypoint < 0 || round_num - waypoint_set > 40 || chebyshev(head, waypoint) <= 2) {
         waypoint = int(rng.next() % uint64_t(N)); waypoint_set = round_num;
     }
     targets.push_back({waypoint, 0.1, 0});
 
-    // ---- evaluate moves ----
     int const need = am_champion ? std::max(12, std::min(2 * L, 120)) : std::max(6, std::min(L + 4, 30));
     int const cap = std::max(need * 2, 60);
     Plan best;
-    Plan fallback;  // unknown portal etc.
+    Plan fallback;
     int const facing = dir_index(ct.get_dir());
     std::vector<double> areas(4, 0);
     for (int d = 0; d < 4; ++d) {
         bool via_portal = false;
         int t = step(head, d, &via_portal);
         if (t < 0) {
-            // kelp, or a portal whose far side we haven't seen: last resort only
             bool kelp = false;
             {
                 int key = d == 0 ? head : d == 2 ? adj(head, 2) : d == 3 ? head : adj(head, 1);
@@ -413,24 +373,20 @@ void turn(unswbc::Controller& ct) {
             bool enemy_head = occ_head[t] && occ_enemy[t];
             if (!enemy_head || am_champion) continue;
             int elen = seg_count[occ_id[t]];
-            if (elen < L && t != hunt) continue;  // only trade even or better
+            if (elen < L && t != hunt) continue;
             p.valid = true; p.attack = true; p.score = 500 + 10 * elen;
             if (p.score > best.score) best = p;
             continue;
         }
-        // Eating holds the tail back a turn, so plan with the longer body.
         int const eff_len = L + (pearl_seen[t] == round_num ? 1 : 0);
         int area = bfs(t, eff_len, cap);
         areas[d] = area;
         double s = 0;
-        // A dragon can't turn round in a corridor, so a dead end of any length is fatal. Call it
-        // a trap unless there's real room or the region runs deeper than our planning horizon.
         int const depth = bfs_depth;
         bool const roomy = K.cycle_test ? (bfs_cycle && area >= 2 * eff_len + 4) : area >= std::max(2 * eff_len, 16);
         bool const trap = depth < std::max(20, eff_len + 4) && !roomy;
         if (trap) s -= 50000 + 100.0 * (20 - std::min(depth, 20)) + 50.0 * std::max(0, 16 - area);
         else if (area < need) s -= (am_champion ? 40.0 : 8.0) * (need - area);
-        // threats
         for (auto const& e : enemies) {
             int md = manhattan(t, e.head);
             if (md == 1) s -= am_champion ? 5000 : (e.len >= L ? 1 : 6);
@@ -442,7 +398,6 @@ void turn(unswbc::Controller& ct) {
             if (md <= 1) s -= is_champ ? 800 : (am_champion ? 200 : 12);
             else if (md == 2 && am_champion) s -= 20;
         }
-        // targets
         double tv = 0;
         for (auto const& g : targets) {
             int dd = dist[g.cell];
@@ -453,18 +408,16 @@ void turn(unswbc::Controller& ct) {
             tv = std::max(tv, v);
         }
         s += tv;
-        // spread the swarm: friendly segments close to t
         if (!am_champion && !feed_phase) {
             for (int c : visible_cells)
                 if (occupied(c) && !occ_enemy[c] && occ_id[c] != my_id && chebyshev(c, t) <= 1) s -= 3;
         }
         if (d == facing) s += 1.0;
-        s += double(rng.next() % 100) / 1000.0;  // deterministic tie-break
+        s += double(rng.next() % 100) / 1000.0;
         p.valid = true; p.score = s; p.trap = trap;
         if (p.score > best.score) best = p;
     }
 
-    // ---- trapped: split as much as we can off the tail; the child leaves the way we came in ----
     auto tail_exit = [&]() {
         for (int d = 0; d < 4; ++d) {
             int n = step(tail, d);
@@ -480,7 +433,6 @@ void turn(unswbc::Controller& ct) {
         goto sonar;
     }
 
-    // ---- champion U-turn: if boxed in, leave 2 behind and let the long child run the other way ----
     if (am_champion && best.valid && !best.attack && areas[best.dir] < need / 2 && L >= 6 && tail >= 0 &&
         ct.get_unit_count() < unswbc::game->get_unit_limit()) {
         int tail_area = 0;
@@ -495,11 +447,7 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
-    // ---- swarm split ----
     if (!feed_phase && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0) {
-        // The child's head is our tail. It needs an exit that isn't a dead end.
-        // Both halves need a real exit, with the whole current body still in the way: the
-        // child moves off later this round and can easily plug the parent's only way out.
         auto has_exit = [&](int from, int avoid) {
             for (int d = 0; d < 4; ++d) {
                 int n = step(from, d);
@@ -510,7 +458,6 @@ void turn(unswbc::Controller& ct) {
             return false;
         };
         bool threatened = !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap);
-        // A single shared exit tile means the child will sit in it.
         if (!threatened) {
             int shared = 0;
             for (int d = 0; d < 4; ++d) { int n = step(head, d); if (n >= 0 && !occupied(n)) ++shared; }
@@ -531,11 +478,10 @@ void turn(unswbc::Controller& ct) {
 
     if (best.valid) ct.make_move(DIRS[best.dir]);
     else if (fallback.valid) ct.make_move(DIRS[fallback.dir]);
-    else ct.make_move(DIRS[facing]);  // nothing safe; this is death either way
+    else ct.make_move(DIRS[facing]);
     ct.set_indicator_string(am_champion ? "C" : hunt >= 0 ? "H" : (feed_phase ? "F" : "W"));
 
 sonar:
-    // ---- gossip out: best-known dragon everywhere, our own report on one rotating ray ----
     {
         int b = best_id();
         uint64_t mine = encode(my_id, reports[my_id]);
@@ -544,7 +490,7 @@ sonar:
     }
 }
 
-}  // namespace
+}
 
 int main() {
     auto [ct, game] = unswbc::init();
