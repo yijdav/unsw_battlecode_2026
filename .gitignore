@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 *.zip
+.unswbc-build/
+# local test opponents and A/B copies
+loong/
+bot2/
+v_*/
