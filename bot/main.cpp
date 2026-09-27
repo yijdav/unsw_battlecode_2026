@@ -28,6 +28,8 @@ struct Knobs {
     double explore_value = 0.3;
     double fountain_value = 0.7;
     bool cycle_test = false;
+    double exit_penalty = 15;
+    bool boxed_suicide = true;
 } K;
 
 int W, H, N;
@@ -263,6 +265,7 @@ void turn(unswbc::Controller& ct) {
     }
     int tail = -1;
     for (int c : visible_cells) if (occupied(c) && occ_id[c] == my_id && self_seg[c] == L - 1) tail = c;
+    if (tail < 0 && (int)history.size() == L && self_seg[history[L - 1]] == L - 1) tail = history[L - 1];
 
     for (uint64_t m : ct.get_sonar_messages()) {
         int id; Report r;
@@ -412,6 +415,19 @@ void turn(unswbc::Controller& ct) {
             for (int c : visible_cells)
                 if (occupied(c) && !occ_enemy[c] && occ_id[c] != my_id && chebyshev(c, t) <= 1) s -= 3;
         }
+        if (K.exit_penalty > 0 && !trap) {
+            int exits = 0, contested = 0;
+            for (int e = 0; e < 4; ++e) {
+                int n = step(t, e);
+                if (n < 0 || n == head || occupied(n)) continue;
+                ++exits;
+                for (int f = 0; f < 4; ++f) {
+                    int m = step(n, f);
+                    if (m >= 0 && m != t && occupied(m) && occ_head[m] && occ_id[m] != my_id) { ++contested; break; }
+                }
+            }
+            if (exits <= 1) s -= K.exit_penalty * (1 + contested);
+        }
         if (d == facing) s += 1.0;
         s += double(rng.next() % 100) / 1000.0;
         p.valid = true; p.score = s; p.trap = trap;
@@ -427,7 +443,8 @@ void turn(unswbc::Controller& ct) {
         }
         return false;
     };
-    if (K.escape_split && (!best.valid || best.trap) && L >= 4 && tail >= 0 && ct.can_split(L - 2) && tail_exit()) {
+    if (K.escape_split && (!best.valid || best.trap) && L >= 4 && ct.can_split(L - 2) &&
+        (tail < 0 || !best.valid || tail_exit())) {
         ct.do_split(L - 2);
         ct.set_indicator_string("escape");
         goto sonar;
@@ -478,8 +495,8 @@ void turn(unswbc::Controller& ct) {
 
     if (best.valid) ct.make_move(DIRS[best.dir]);
     else if (fallback.valid) ct.make_move(DIRS[fallback.dir]);
-    else ct.make_move(DIRS[facing]);
-    ct.set_indicator_string(am_champion ? "C" : hunt >= 0 ? "H" : (feed_phase ? "F" : "W"));
+    else if (!K.boxed_suicide) ct.make_move(DIRS[facing]);
+    ct.set_indicator_string(!best.valid ? (fallback.valid ? "XP" : "XF") : best.trap ? "T" : am_champion ? "C" : hunt >= 0 ? "H" : (feed_phase ? "F" : "W"));
 
 sonar:
     {
