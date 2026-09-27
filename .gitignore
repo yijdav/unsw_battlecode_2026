@@ -7,3 +7,4 @@ __pycache__/
 # local test opponents and A/B copies
 bot2/
 v_*/
+opp_*/
