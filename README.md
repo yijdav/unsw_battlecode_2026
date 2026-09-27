@@ -22,9 +22,9 @@ It costs about 5M of the judge's 100M CPU points per dragon per turn, including 
 ## Running it
 
 ```bash
-unswbc run maps/ladder/default.map bot starter          # one match
-unswbc run --sandbox maps/ladder/default.map bot starter  # priced like the judge
-python3 tools/arena.py bot starter --maps maps/ladder -j 8 --seeds 2   # every map, both sides
+unswbc run maps/ladder/default.map bot bot            # one match
+unswbc run --sandbox maps/ladder/default.map bot bot    # priced like the judge
+python3 tools/arena.py bot v_test --maps maps/ladder -j 8 --seeds 2   # every map, both sides
 python3 tools/variant.py v_test feed_start_small=350     # copy bot with a knob changed, for A/B
 unswbc submit bot -n v1 -d "swarm + feed"
 ```

@@ -5,6 +5,5 @@ __pycache__/
 *.zip
 .unswbc-build/
 # local test opponents and A/B copies
-loong/
 bot2/
 v_*/
