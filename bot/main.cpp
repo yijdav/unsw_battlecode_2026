@@ -29,6 +29,11 @@ struct Knobs {
     double fountain_value = 0.7;
     bool cycle_test = false;
     double exit_penalty = 15;
+    int split_crowd = 99;
+    bool remote_hunt = false;
+    int sighting_len = 8;
+    int hunt_start = 150;
+    int hunt_radius = 20;
     bool boxed_suicide = true;
 } K;
 
@@ -133,6 +138,10 @@ int best_id() {
     }
     return best;
 }
+
+constexpr int ENEMY_ID = 4095;
+Report sighting{0, -1, -1000};
+bool sighting_fresh() { return sighting.cell >= 0 && sighting.round >= round_num - 12; }
 
 std::deque<int> history;
 
@@ -270,6 +279,10 @@ void turn(unswbc::Controller& ct) {
     for (uint64_t m : ct.get_sonar_messages()) {
         int id; Report r;
         if (!decode(m, id, r) || id == my_id) continue;
+        if (id == ENEMY_ID) {
+            if (!sighting_fresh() || r.round > sighting.round || (r.round == sighting.round && r.len > sighting.len)) sighting = r;
+            continue;
+        }
         auto it = reports.find(id);
         if (it == reports.end() || r.round >= it->second.round) reports[id] = r;
     }
@@ -289,6 +302,10 @@ void turn(unswbc::Controller& ct) {
         champ_head = reports[champ].cell;
         for (int c : friend_heads) if (occ_id[c] == champ) { champ_head = c; champ_visible = true; }
     }
+
+    for (auto const& e : enemies)
+        if (e.len >= K.sighting_len && (!sighting_fresh() || e.len >= sighting.len || chebyshev(e.head, sighting.cell) <= 3))
+            sighting = {e.len, e.head, round_num};
 
     int hunt = -1;
     if (!am_champion) {
@@ -337,6 +354,11 @@ void turn(unswbc::Controller& ct) {
     }
     if (hunt >= 0) {
         for (int d = 0; d < 4; ++d) { int n = step(hunt, d); if (n >= 0) targets.push_back({n, 3.0, 0}); }
+    }
+    if (K.remote_hunt && !am_champion && hunt < 0 && sighting_fresh() && round_num >= K.hunt_start &&
+        manhattan(head, sighting.cell) <= K.hunt_radius &&
+        (champ_head < 0 || manhattan(head, sighting.cell) < manhattan(head, champ_head))) {
+        for (int d = 0; d < 4; ++d) targets.push_back({adj(sighting.cell, d), 2.8, 0});
     }
     if (feed_phase && !am_champion && champ_head >= 0) {
         for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0}); }
@@ -474,7 +496,9 @@ void turn(unswbc::Controller& ct) {
             }
             return false;
         };
-        bool threatened = !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap);
+        int crowd = 0;
+        for (int c : visible_cells) if (occupied(c) && !occ_enemy[c] && occ_id[c] != my_id) ++crowd;
+        bool threatened = crowd > K.split_crowd || !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap);
         if (!threatened) {
             int shared = 0;
             for (int d = 0; d < 4; ++d) { int n = step(head, d); if (n >= 0 && !occupied(n)) ++shared; }
@@ -503,7 +527,9 @@ sonar:
         int b = best_id();
         uint64_t mine = encode(my_id, reports[my_id]);
         uint64_t best_msg = b >= 0 ? encode(b, reports[b]) : mine;
-        for (int d = 0; d < 4; ++d) ct.send_sonar(DIRS[d], d == round_num % 4 ? mine : best_msg);
+        uint64_t enemy_msg = sighting_fresh() ? encode(ENEMY_ID, sighting) : best_msg;
+        for (int d = 0; d < 4; ++d)
+            ct.send_sonar(DIRS[d], d == round_num % 4 ? mine : d == (round_num + 2) % 4 ? enemy_msg : best_msg);
     }
 }
 
