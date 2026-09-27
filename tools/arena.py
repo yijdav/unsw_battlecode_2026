@@ -16,7 +16,16 @@ def play(map_path, a, b, seed, sandbox):
     if m:
         return m.group(1), int(m.group(2)), m.group(3), text
     m = re.search(r"draw after (\d+) rounds", text)
-    return ("draw", int(m.group(1)) if m else -1, "draw", text)
+    if m:
+        return "draw", int(m.group(1)), "draw", text
+    return "error", -1, "error", text
+
+
+def warm(bot, sandbox):
+    cmd = ["unswbc", "run", str(ROOT / "maps" / "arena.map"), bot, bot, "--no-replay", "--seed", "1"]
+    if sandbox:
+        cmd.append("--sandbox")
+    subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
 
 
 def main():
@@ -45,8 +54,11 @@ def main():
     def run(job):
         opp, mp, a, b, seed, side = job
         winner, rounds, how, _ = play(mp, a, b, seed, args.sandbox)
-        res = "draw" if winner == "draw" else ("win" if winner == side else "loss")
+        res = winner if winner in ("draw", "error") else ("win" if winner == side else "loss")
         return opp, f"{mp.parent.name}/{mp.stem}", side, res, rounds, how
+
+    for b in dict.fromkeys([args.bot, *args.opponents]):
+        warm(b, args.sandbox)
 
     tally = defaultdict(lambda: defaultdict(int))
     losses = []
@@ -56,8 +68,9 @@ def main():
             if res != "win":
                 losses.append(f"  {res:4s} vs {opp:10s} {mp:28s} as {side}  r{rounds} ({how})")
     for opp, t in tally.items():
-        n = sum(t.values())
-        print(f"{args.bot} vs {opp}: {t['win']}W {t['draw']}D {t['loss']}L  ({t['win'] / n:.0%} wins of {n})")
+        n = t["win"] + t["draw"] + t["loss"]
+        err = f"  {t['error']} failed to run" if t["error"] else ""
+        print(f"{args.bot} vs {opp}: {t['win']}W {t['draw']}D {t['loss']}L  ({t['win'] / max(n, 1):.0%} wins of {n}){err}")
     print("\n".join(sorted(losses)))
 
 
