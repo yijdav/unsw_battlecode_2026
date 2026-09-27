@@ -107,21 +107,21 @@ int step(int c, int d, bool* via_portal = nullptr) {
 
 struct Report { int len, cell, round; };
 std::unordered_map<int, Report> reports;
-constexpr uint64_t TAG = 0x2A7;
+uint64_t team_tag() { return my_team == unswbc::Team::A ? 0x2A7 : 0x1D9; }
 
 uint8_t checksum(uint64_t body) {
     uint64_t h = body * 0x9E3779B97F4A7C15ull;
     return static_cast<uint8_t>(h >> 56);
 }
 uint64_t encode(int id, Report const& r) {
-    uint64_t body = (TAG << 50) | (uint64_t(id & 0xFFF) << 38) | (uint64_t(std::min(r.len, 511)) << 29) |
+    uint64_t body = (team_tag() << 50) | (uint64_t(id & 0xFFF) << 38) | (uint64_t(std::min(r.len, 511)) << 29) |
                     (uint64_t(cx(r.cell) & 63) << 23) | (uint64_t(cy(r.cell) & 63) << 17) |
                     (uint64_t(r.round & 511) << 8);
     return body | checksum(body);
 }
 bool decode(uint64_t m, int& id, Report& r) {
     uint64_t body = m & ~uint64_t(0xFF);
-    if ((m >> 50) != TAG || checksum(body) != (m & 0xFF)) return false;
+    if ((m >> 50) != team_tag() || checksum(body) != (m & 0xFF)) return false;
     id = int((m >> 38) & 0xFFF);
     r.len = int((m >> 29) & 511);
     int x = int((m >> 23) & 63), y = int((m >> 17) & 63);
