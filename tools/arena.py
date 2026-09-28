@@ -1,4 +1,4 @@
-import argparse, base64, io, json, math, os, re, shlex, subprocess, sys, tarfile, threading, uuid
+import argparse, base64, io, json, math, os, queue, re, shlex, subprocess, sys, tarfile, threading, time, uuid
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from pathlib import Path
@@ -9,22 +9,33 @@ SSH_MUX = ["-o", "ControlMaster=auto", "-o", f"ControlPath={Path.home()}/.ssh/cm
 SSH_OPTS = SSH_BASE + SSH_MUX
 
 RUNNER = r'''
-import json, os, subprocess, sys
-from concurrent.futures import ThreadPoolExecutor
-jobs, bots, j, sandbox = json.loads(PAYLOAD)
+import json, os, subprocess, sys, threading
+bots, j, sandbox = json.loads(sys.stdin.readline())
 env = dict(os.environ, PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""))
 def cmd(args):
     return ["nice", "-n", "10", "unswbc", "run", *args] + (["--sandbox"] if sandbox else [])
 for b in bots:
     subprocess.run(cmd(["maps/arena.map", b, b, "--no-replay", "--seed", "1"]), capture_output=True, text=True, env=env)
-def play(job):
-    i, mp, a, b, seed, out = job
-    r = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), capture_output=True, text=True, env=env, errors="replace")
-    return i, r.stdout[-1500:] + ("" if "wins after" in r.stdout or "draw after" in r.stdout else "\nSTDERR " + r.stderr[-800:])
-with ThreadPoolExecutor(j) as pool:
-    for i, text in pool.map(play, jobs):
-        print(json.dumps([i, text[-2000:]]), flush=True)
+print(json.dumps(["ready"]), flush=True)
+lock_in, lock_out = threading.Lock(), threading.Lock()
+def worker():
+    while True:
+        with lock_in:
+            line = sys.stdin.readline()
+        if not line.strip():
+            return
+        i, mp, a, b, seed, out = json.loads(line)
+        r = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), capture_output=True, text=True, env=env, errors="replace")
+        text = r.stdout[-1500:] + ("" if "wins after" in r.stdout or "draw after" in r.stdout else "\nSTDERR " + r.stderr[-800:])
+        with lock_out:
+            print(json.dumps([i, text[-2000:]]), flush=True)
+threads = [threading.Thread(target=worker) for _ in range(j)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
 '''
+BOOT = "import sys,base64;exec(base64.b64decode(sys.stdin.readline()))"
 
 
 def safe(name):
@@ -151,53 +162,88 @@ def main():
             remotes.append(r)
         else:
             print(f"remote {r.name} unreachable, skipping it", file=sys.stderr)
-    workers = [None, *remotes]
-    weights = [args.j, *[r.j for r in remotes]]
-    credit = [0.0] * len(workers)
-    owner = {}
-    for i in range(len(jobs)):
-        for k, w in enumerate(weights):
-            credit[k] += w
-        k = max(range(len(workers)), key=lambda k: credit[k])
-        credit[k] -= sum(weights)
-        owner[i] = workers[k]
-    remote_ids = {i for i, w in owner.items() if w is not None}
-
     results = {}
+    owner = {}
     lock = threading.Lock()
+    pending = queue.Queue()
+    for i in range(len(jobs)):
+        pending.put(i)
 
-    def record(i, outcome):
+    def record(i, outcome, where):
         me, opp, mp, a, b, seed, side = jobs[i]
         winner, rounds, how = outcome
         res = winner if winner in ("draw", "error") else ("win" if winner == side else "loss")
         with lock:
             results[i] = (me, opp, f"{mp.parent.name}/{mp.stem}", side, res, rounds, how, seed)
+            owner[i] = where
+
+    def job_line(i):
+        me, opp, mp, a, b, seed, side = jobs[i]
+        return json.dumps([i, str(mp.relative_to(ROOT)), a, b, seed, str(replay_path(mp, a, b, seed))]) + "\n"
 
     def run_remote(r):
-        spec = [[i, str(jobs[i][2].relative_to(ROOT)), jobs[i][3], jobs[i][4], jobs[i][5],
-                 str(replay_path(jobs[i][2], jobs[i][3], jobs[i][4], jobs[i][5]))] for i in sorted(remote_ids) if owner[i] is r]
-        payload = json.dumps([spec, bots, r.j, args.sandbox])
-        command = f"cd {r.ws} && python3 -"
+        header = json.dumps([bots, r.j, args.sandbox])
+        command = f"cd {r.ws} && python3 -c {shlex.quote(BOOT)}"
         for mux in ([True, False] if r.mux else [False]):
             got = 0
+            given = 0
+            assigned = set()
             proc = subprocess.Popen(r.argv(command, mux=mux), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, errors="replace")
-            proc.stdin.write(f"PAYLOAD = {payload!r}\n" + RUNNER)
-            proc.stdin.close()
+                                    stderr=subprocess.PIPE, text=True, errors="replace", bufsize=1)
+            closed = False
+
+            def feed():
+                nonlocal closed, given
+                if closed:
+                    return
+                try:
+                    i = pending.get_nowait()
+                except queue.Empty:
+                    if not assigned:
+                        closed = True
+                        try:
+                            proc.stdin.close()
+                        except OSError:
+                            pass
+                    return
+                assigned.add(i)
+                given += 1
+                try:
+                    proc.stdin.write(job_line(i))
+                    proc.stdin.flush()
+                except OSError:
+                    pass
+
+            try:
+                proc.stdin.write(base64.b64encode(RUNNER.encode()).decode() + "\n" + header + "\n")
+                proc.stdin.flush()
+            except OSError:
+                pass
             for line in proc.stdout:
                 try:
-                    i, text = json.loads(line)
+                    msg = json.loads(line)
                 except ValueError:
                     continue
+                if msg == ["ready"]:
+                    for _ in range(r.j):
+                        feed()
+                    continue
+                i, text = msg
+                if i not in assigned:
+                    continue
+                assigned.discard(i)
                 outcome = parse(text)
                 if outcome[0] == "error" and not r.reported:
                     r.reported = True
                     print(f"{r.host}: a game failed: {text.strip()[-600:]}", file=sys.stderr)
-                record(i, outcome)
+                record(i, outcome, r)
                 got += 1
+                feed()
             err = proc.stderr.read()
             proc.wait()
-            if got:
+            for i in assigned:
+                pending.put(i)
+            if got or (given == 0 and proc.returncode == 0):
                 break
             print(f"{r.host}: no results (exit {proc.returncode}): {err.strip()[-600:]}", file=sys.stderr)
             if proc.returncode != 255:
@@ -211,14 +257,31 @@ def main():
     for b in bots:
         warm(b, args.sandbox)
 
-    def run_local(i):
-        me, opp, mp, a, b, seed, side = jobs[i]
-        record(i, play(mp, a, b, seed, args.sandbox))
+    def local_worker():
+        while True:
+            try:
+                i = pending.get(timeout=0.5)
+            except queue.Empty:
+                with lock:
+                    finished = len(results) >= len(jobs)
+                if finished or not any(t.is_alive() for t in threads):
+                    if pending.empty():
+                        return
+                continue
+            me, opp, mp, a, b, seed, side = jobs[i]
+            record(i, play(mp, a, b, seed, args.sandbox), None)
 
-    with ThreadPoolExecutor(max(args.j, 1)) as pool:
-        list(pool.map(run_local, [i for i in range(len(jobs)) if i not in remote_ids]))
+    local = [threading.Thread(target=local_worker) for _ in range(args.j)]
+    for t in local:
+        t.start()
     for t in threads:
         t.join()
+    for t in local:
+        t.join()
+    while not pending.empty():
+        i = pending.get()
+        me, opp, mp, a, b, seed, side = jobs[i]
+        record(i, play(mp, a, b, seed, args.sandbox), None)
 
     tally = defaultdict(lambda: defaultdict(int))
     losses = []
@@ -229,7 +292,7 @@ def main():
         me, opp, mp, side, res, rounds, how, seed = results[i]
         tally[(me, opp)][res] += 1
         if res != "win":
-            where = f" on {owner[i].host}" if owner[i] is not None else ""
+            where = f" on {owner[i].host}" if owner.get(i) is not None else ""
             who = f"{me} " if args.baseline else ""
             losses.append(f"  {who}{res:4s} vs {opp:10s} {mp:28s} as {side}  r{rounds} ({how}){where}")
     for (me, opp), t in tally.items():
