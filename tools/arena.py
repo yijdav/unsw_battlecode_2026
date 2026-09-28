@@ -1,4 +1,4 @@
-import argparse, io, json, os, re, subprocess, sys, tarfile, threading, uuid
+import argparse, base64, io, json, os, re, shlex, subprocess, sys, tarfile, threading, uuid
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from pathlib import Path
@@ -59,8 +59,26 @@ def warm(bot, sandbox):
     subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
 
 
+class Remote:
+    def __init__(self, spec, default_j):
+        self.wsl = spec.startswith("wsl:")
+        spec = spec[4:] if self.wsl else spec
+        self.j = default_j
+        m = re.match(r"^(.*):(\d+)$", spec)
+        if m:
+            spec, self.j = m.group(1), int(m.group(2))
+        self.user, _, self.host = spec.rpartition("@")
+        self.name = spec
+
+    def argv(self, command):
+        b64 = base64.b64encode(command.encode()).decode()
+        remote = f"wsl --exec /usr/local/bin/bcrun {b64}" if self.wsl else f'bash -lc "$(echo {b64} | base64 -d)"'
+        login = ["-l", self.user] if self.user else []
+        return ["ssh", *SSH_OPTS, *login, self.host, remote]
+
+
 def ssh(host, command, **kw):
-    return subprocess.run(["ssh", *SSH_OPTS, host, f"bash -lc {json.dumps(command)}"], **kw)
+    return subprocess.run(host.argv(command), **kw)
 
 
 def sync(host, ws, bots):
@@ -92,7 +110,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("-j", type=int, default=8)
     ap.add_argument("--sandbox", action="store_true")
-    ap.add_argument("--remote", default=os.environ.get("ARENA_REMOTE"))
+    ap.add_argument("--remote", default=os.environ.get("ARENA_REMOTE"), help="comma-separated [wsl:]user@host[:jobs]")
     ap.add_argument("--remote-j", type=int, default=int(os.environ.get("ARENA_REMOTE_J", "8")))
     args = ap.parse_args()
 
@@ -110,16 +128,27 @@ def main():
                 jobs.append((opp, mp, opp, args.bot, seed, "B"))
 
     bots = list(dict.fromkeys([args.bot, *args.opponents]))
-    remote_ids = set()
-    ws = None
-    if args.remote and args.remote_j > 0:
-        ws = f"bc/runs/{uuid.uuid4().hex[:12]}"
-        if sync(args.remote, ws, bots):
-            share = args.remote_j / (args.remote_j + args.j)
-            remote_ids = {i for i in range(len(jobs)) if int((i + 1) * share) > int(i * share)}
+    remotes = []
+    for spec in filter(None, (args.remote or "").split(",")):
+        r = Remote(spec.strip(), args.remote_j)
+        if r.j <= 0:
+            continue
+        r.ws = f"bc/runs/{uuid.uuid4().hex[:12]}"
+        if sync(r, r.ws, bots):
+            remotes.append(r)
         else:
-            print(f"remote {args.remote} unreachable, running everything locally", file=sys.stderr)
-            ws = None
+            print(f"remote {r.name} unreachable, skipping it", file=sys.stderr)
+    workers = [None, *remotes]
+    weights = [args.j, *[r.j for r in remotes]]
+    credit = [0.0] * len(workers)
+    owner = {}
+    for i in range(len(jobs)):
+        for k, w in enumerate(weights):
+            credit[k] += w
+        k = max(range(len(workers)), key=lambda k: credit[k])
+        credit[k] -= sum(weights)
+        owner[i] = workers[k]
+    remote_ids = {i for i, w in owner.items() if w is not None}
 
     results = {}
     lock = threading.Lock()
@@ -131,12 +160,11 @@ def main():
         with lock:
             results[i] = (opp, f"{mp.parent.name}/{mp.stem}", side, res, rounds, how)
 
-    def run_remote():
+    def run_remote(r):
         spec = [[i, str(jobs[i][1].relative_to(ROOT)), jobs[i][2], jobs[i][3], jobs[i][4],
-                 str(replay_path(jobs[i][1], jobs[i][2], jobs[i][3], jobs[i][4]))] for i in sorted(remote_ids)]
-        payload = json.dumps([spec, bots, args.remote_j, args.sandbox])
-        remote_cmd = f"cd {ws} && python3 - {json.dumps(payload)}"
-        proc = subprocess.Popen(["ssh", *SSH_OPTS, args.remote, f"bash -lc {json.dumps(remote_cmd)}"],
+                 str(replay_path(jobs[i][1], jobs[i][2], jobs[i][3], jobs[i][4]))] for i in sorted(remote_ids) if owner[i] is r]
+        payload = json.dumps([spec, bots, r.j, args.sandbox])
+        proc = subprocess.Popen(r.argv(f"cd {r.ws} && python3 - {shlex.quote(payload)}"),
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         proc.stdin.write(RUNNER)
         proc.stdin.close()
@@ -147,11 +175,11 @@ def main():
                 continue
             record(i, parse(text))
         proc.wait()
-        fetch(args.remote, ws)
+        fetch(r, r.ws)
 
-    remote_thread = threading.Thread(target=run_remote) if remote_ids else None
-    if remote_thread:
-        remote_thread.start()
+    threads = [threading.Thread(target=run_remote, args=(r,)) for r in remotes]
+    for t in threads:
+        t.start()
 
     for b in bots:
         warm(b, args.sandbox)
@@ -160,10 +188,10 @@ def main():
         opp, mp, a, b, seed, side = jobs[i]
         record(i, play(mp, a, b, seed, args.sandbox))
 
-    with ThreadPoolExecutor(args.j) as pool:
+    with ThreadPoolExecutor(max(args.j, 1)) as pool:
         list(pool.map(run_local, [i for i in range(len(jobs)) if i not in remote_ids]))
-    if remote_thread:
-        remote_thread.join()
+    for t in threads:
+        t.join()
 
     tally = defaultdict(lambda: defaultdict(int))
     losses = []
@@ -173,14 +201,14 @@ def main():
         opp, mp, side, res, rounds, how = results[i]
         tally[opp][res] += 1
         if res != "win":
-            where = " remote" if i in remote_ids else ""
+            where = f" on {owner[i].host}" if owner[i] is not None else ""
             losses.append(f"  {res:4s} vs {opp:10s} {mp:28s} as {side}  r{rounds} ({how}){where}")
     for opp, t in tally.items():
         n = t["win"] + t["draw"] + t["loss"]
         err = f"  {t['error']} failed to run" if t["error"] else ""
         print(f"{args.bot} vs {opp}: {t['win']}W {t['draw']}D {t['loss']}L  ({t['win'] / max(n, 1):.0%} wins of {n}){err}")
-    if remote_ids:
-        print(f"({len(remote_ids)} of {len(jobs)} games ran on {args.remote})")
+    for r in remotes:
+        print(f"({sum(1 for w in owner.values() if w is r)} of {len(jobs)} games ran on {r.host})")
     print("\n".join(sorted(losses)))
 
 
