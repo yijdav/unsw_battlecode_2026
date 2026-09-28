@@ -35,6 +35,92 @@ struct Knobs {
     int hunt_start = 150;
     int hunt_radius = 20;
     bool boxed_suicide = true;
+    bool split_report = true;
+    bool sight_refresh = true;
+    bool sight_partial = true;
+    bool feed_guard = true;
+    int feed_margin = 1;
+    int feed_min_age = 3;
+    double feed_self_frac = 0;
+    bool trap_model = true;
+    bool trap_model_feed = true;
+    int model_slack = 0;
+    bool horizon_cap = true;
+    int split_guard_len = 6;
+    bool split_guard_champ = true;
+    bool uturn_guard = true;
+    int split_guard_mode = 0;
+    bool split_guard_feed = true;
+    int split_shout = 3;
+    bool split_need_tail = true;
+    bool tombstone = true;
+    double portal_explore = 45;
+    double portal_entry = 0.45;
+    bool portal_feed = true;
+    int portal_max_len = 99;
+    int portal_region = 300;
+    bool portal_share = true;
+    int portal_gossip = 2;
+    bool portal_need_tail = true;
+    double blind_land = 10;
+    double champ_blind_land = 300;
+    double champ_portal_cell = 100;
+    int spawn_lead = 1;
+    double spawn_block = 30;
+    int reach_cap = 3;
+    bool reach_clip = true;
+    double reach_champ = 5000;
+    double reach_champ_edge = 150;
+    double reach_champ_far = 0;
+    int reach_long_len = 5;
+    double reach_long = 60;
+    double reach_long_edge = 30;
+    double reach_adj = 400;
+    double reach_adj_len = 20;
+    int reach_adj_units = 999;
+    int reach_pearl_len = 8;
+    double reach_corner = 2000;
+    double reach_corner_long = 30;
+    bool sprint_ram = true;
+    int sprint_margin = 1;
+    int sprint_max_len = 5;
+    int sprint_steps = 3;
+    int guard_radius = 4;
+    bool guard_chase = false;
+    int sprint_min_units = 1;
+    bool pocket_delay = true;
+    bool delay_in_feed = true;
+    bool pocket_harvest = true;
+    int harvest_pearls = 3;
+    double harvest_cost = 20;
+    int harvest_enemy_dist = 0;
+    bool harvest_depth_check = true;
+    bool harvest_tube = true;
+    bool harvest_clear = true;
+    bool ram_gate = true;
+    int ram_min_units = 2;
+    int ram_long_units = 2;
+    int eq_min_units = 8;
+    int eq_free_gap = 16;
+    int eq_local = 1;
+    int eq_window = 0;
+    double eq_avoid = 6;
+    bool eq_feed = true;
+    bool ram_trap = true;
+    bool no_reverse = true;
+    bool history_dedupe = true;
+    bool chain_plain = true;
+    bool history_young = true;
+    bool history_seed = true;
+    double young_blind_land = 150;
+    bool danger_step = true;
+    bool tombstone_body = true;
+    bool reach_clip_portal = true;
+    int hold_danger = 1;
+    bool hold_danger_tail = true;
+    bool guard_fresh = true;
+    bool ram_escape_full = true;
+    int horizon_slack = 0;
 } K;
 
 int W, H, N;
@@ -63,6 +149,7 @@ inline int chebyshev(int a, int b) { return std::max(wrapd(cx(a), cx(b), W), wra
 
 std::vector<uint8_t> edge_n, edge_w;
 std::vector<int> portal_n, portal_w;
+std::vector<int> partner_n, partner_w;
 std::vector<int> pearl_seen;
 std::vector<int> spawn_at;
 std::vector<int> seen_round;
@@ -70,39 +157,48 @@ std::vector<uint8_t> quick_seen;
 std::vector<int> quick_round;
 struct PortalEnd { int cell; bool north; };
 std::unordered_map<int, std::vector<PortalEnd>> portals;
+struct PairRec { int a, b; bool north; int last; };
+std::vector<PairRec> pairs;
 
-std::vector<int> occ_stamp, occ_id, self_seg;
-std::vector<uint8_t> occ_head, occ_enemy;
-int stamp = 0;
+std::vector<int> occ_stamp, occ_id, self_seg, ff_stamp, ff_free, rim_stamp, ptl_stamp;
+std::vector<uint8_t> occ_head, occ_enemy, occ_dir;
+std::vector<int> threat_at, threat_lt, threat_le, reach_mark, reach_dist;
+int stamp = 0, reach_id = 0;
 inline bool occupied(int c) { return occ_stamp[c] == stamp; }
+
+void link_pair(int a, int b, bool north) {
+    auto& pa = north ? partner_n : partner_w;
+    if (pa[a] == b && pa[b] == a) return;
+    pa[a] = b; pa[b] = a;
+    (north ? edge_n : edge_w)[a] = 2; (north ? edge_n : edge_w)[b] = 2;
+    for (auto& p : pairs)
+        if (p.north == north && (p.a == a || p.b == a || p.a == b || p.b == b)) { p.a = a; p.b = b; p.last = round_num; return; }
+    pairs.push_back({a, b, north, round_num});
+}
 
 void remember_portal(int id, int cell, bool north) {
     auto& ends = portals[id];
     for (auto const& e : ends) if (e.cell == cell && e.north == north) return;
     ends.push_back({cell, north});
+    if (ends.size() == 2 && ends[0].north == ends[1].north) link_pair(ends[0].cell, ends[1].cell, north);
+}
+
+int edge_key(int c, int d, bool& north) {
+    north = d == 0 || d == 2;
+    return d == 2 ? adj(c, 2) : d == 1 ? adj(c, 1) : c;
 }
 
 int step(int c, int d, bool* via_portal = nullptr) {
-    uint8_t kind; int pid; int key; bool north;
-    switch (d) {
-    case 0: key = c; north = true; break;
-    case 2: key = adj(c, 2); north = true; break;
-    case 3: key = c; north = false; break;
-    default: key = adj(c, 1); north = false; break;
-    }
-    kind = north ? edge_n[key] : edge_w[key];
+    bool north;
+    int const key = edge_key(c, d, north);
+    uint8_t const kind = north ? edge_n[key] : edge_w[key];
     if (via_portal) *via_portal = false;
     if (kind == 1) return -1;
     if (kind == 0) return adj(c, d);
-    pid = north ? portal_n[key] : portal_w[key];
     if (via_portal) *via_portal = true;
-    auto it = portals.find(pid);
-    if (it == portals.end()) return -1;
-    for (auto const& e : it->second) {
-        if (e.cell == key && e.north == north) continue;
-        return (d == 0 || d == 3) ? adj(e.cell, d) : e.cell;
-    }
-    return -1;
+    int const p = north ? partner_n[key] : partner_w[key];
+    if (p < 0) return -1;
+    return (d == 0 || d == 3) ? adj(p, d) : p;
 }
 
 struct Report { int len, cell, round; };
@@ -130,6 +226,32 @@ bool decode(uint64_t m, int& id, Report& r) {
     r.round = int((m >> 8) & 511);
     return true;
 }
+uint64_t pair_tag() { return team_tag() ^ 0x3FF; }
+uint64_t pair_check(uint64_t body) { return (body * 0x9E3779B97F4A7C15ull) >> 39; }
+uint64_t encode_pair(PairRec const& p) {
+    uint64_t body = (pair_tag() << 50) | (uint64_t(cx(p.a) & 63) << 44) | (uint64_t(cy(p.a) & 63) << 38) |
+                    (uint64_t(cx(p.b) & 63) << 32) | (uint64_t(cy(p.b) & 63) << 26) | (uint64_t(p.north) << 25);
+    return body | pair_check(body);
+}
+bool decode_pair(uint64_t m, int& a, int& b, bool& north) {
+    uint64_t body = m & ~uint64_t(0x1FFFFFF);
+    if ((m >> 50) != pair_tag() || pair_check(body) != (m & 0x1FFFFFF)) return false;
+    int ax = int((m >> 44) & 63), ay = int((m >> 38) & 63), bx = int((m >> 32) & 63), by = int((m >> 26) & 63);
+    if (ax >= W || ay >= H || bx >= W || by >= H) return false;
+    a = cell_of(ax, ay); b = cell_of(bx, by); north = (m >> 25) & 1;
+    return a != b;
+}
+bool edge_contradicts(int key, bool north, int other_end) {
+    int const beside = north ? adj(key, 0) : adj(key, 3);
+    int const known = (north ? partner_n : partner_w)[key];
+    if (known >= 0 && known != other_end) return true;
+    return (seen_round[key] >= 0 || seen_round[beside] >= 0) && (north ? edge_n : edge_w)[key] != 2;
+}
+void hear_pair(int a, int b, bool north) {
+    if (edge_contradicts(a, north, b) || edge_contradicts(b, north, a)) return;
+    link_pair(a, b, north);
+}
+
 int best_id() {
     int best = -1; Report const* br = nullptr;
     for (auto const& [id, r] : reports) {
@@ -145,11 +267,13 @@ bool sighting_fresh() { return sighting.cell >= 0 && sighting.round >= round_num
 
 std::deque<int> history;
 
-struct Enemy { int head, len; };
+struct Enemy { int head, len; bool clipped; };
 
 struct Plan {
     bool valid = false;
     bool trap = false;
+    bool harvest = false;
+    bool danger = false;
     double score = -1e18;
     int dir = 0;
     bool attack = false;
@@ -158,8 +282,29 @@ struct Plan {
 std::vector<int> dist;
 double decay[256];
 
+std::vector<int> region_mark;
+int region_stamp = 0;
+int plain_region(int start, int cap) {
+    ++region_stamp;
+    static std::vector<int> queue; queue.clear();
+    region_mark[start] = region_stamp; queue.push_back(start);
+    for (size_t qi = 0; qi < queue.size() && (int)queue.size() <= cap; ++qi) {
+        int c = queue[qi];
+        for (int d = 0; d < 4; ++d) {
+            bool north;
+            int const key = edge_key(c, d, north);
+            if ((north ? edge_n : edge_w)[key] != 0) continue;
+            int n = adj(c, d);
+            if (region_mark[n] == region_stamp) continue;
+            region_mark[n] = region_stamp; queue.push_back(n);
+        }
+    }
+    return (int)queue.size();
+}
+
 int bfs_depth = 0;
 bool bfs_cycle = false;
+bool bfs_terrain = false;
 int bfs(int start, int length, int cap) {
     std::fill(dist.begin(), dist.end(), INF);
     static std::vector<int> queue; queue.clear();
@@ -177,7 +322,10 @@ int bfs(int start, int length, int cap) {
             int t = dist[c] + 1;
             if (occupied(n)) {
                 int s = self_seg[n];
-                if (s < 0 || s < length - (t - 1)) continue;
+                bool ok = s >= 0 && s >= length - (t - 1);
+                if (s < 0 && ff_stamp[n] == stamp && ff_free[n] <= t - 1) ok = true;
+                if (s < 0 && bfs_terrain && occ_id[n] != my_id) ok = true;
+                if (!ok) continue;
             }
             dist[n] = t; queue.push_back(n);
         }
@@ -193,17 +341,23 @@ struct Rng {
 
 int waypoint = -1, waypoint_set = -1000;
 bool was_champion = false;
+int turns_alive = 0;
+int shout_until = -1;
+std::unordered_map<int, int> foe_seen, pal_seen;
 
 void turn(unswbc::Controller& ct) {
-    ++stamp;
+    ++stamp; ++turns_alive;
     round_num = unswbc::game->get_round_num();
     int const L = ct.get_length();
     auto const& tiles = ct.get_tiles();
     int const head = cell_of(ct.get_position().x, ct.get_position().y);
     int const feed_start = (N >= 2048) ? K.feed_start_big : K.feed_start_small;
     bool const feed_phase = round_num >= feed_start;
+    bool split_turn = false;
 
     std::unordered_map<int, int> seg_count;
+    std::unordered_map<int, bool> partial;
+    std::unordered_map<int, bool> clipped;
     std::vector<int> friend_heads, visible_cells;
     std::vector<Enemy> enemies;
     visible_cells.reserve(VS * VS);
@@ -211,6 +365,7 @@ void turn(unswbc::Controller& ct) {
         auto const& t = tiles[i];
         int c = cell_of(t.get_position().x, t.get_position().y);
         visible_cells.push_back(c);
+        if (i / VS == 0 || i % VS == 0 || i / VS == VS - 1 || i % VS == VS - 1) rim_stamp[c] = stamp;
         for (int d = 0; d < 4; ++d) {
             auto const& e = t.get_edge(DIRS[d]);
             uint8_t kind = e.get_edge_type() == unswbc::EdgeType::KELP ? 1 : e.is_portal() ? 2 : 0;
@@ -219,7 +374,7 @@ void turn(unswbc::Controller& ct) {
             else if (d == 2) { key = adj(c, 2); }
             else if (d == 3) { north = false; }
             (north ? edge_n : edge_w)[key] = kind;
-            if (kind == 2) { (north ? portal_n : portal_w)[key] = e.get_portal_id(); remember_portal(e.get_portal_id(), key, north); }
+            if (kind == 2) { (north ? portal_n : portal_w)[key] = e.get_portal_id(); remember_portal(e.get_portal_id(), key, north); ptl_stamp[c] = stamp; }
         }
         pearl_seen[c] = t.has_pearl() ? round_num : -1;
         seen_round[c] = round_num;
@@ -233,17 +388,31 @@ void turn(unswbc::Controller& ct) {
         }
         if (auto const* p = t.get_dragon()) {
             occ_stamp[c] = stamp; occ_id[c] = p->get_id(); occ_head[c] = p->is_head();
-            occ_enemy[c] = p->get_team() != my_team; self_seg[c] = -1;
+            occ_enemy[c] = p->get_team() != my_team; self_seg[c] = -1; occ_dir[c] = dir_index(p->get_dir());
             seg_count[p->get_id()]++;
+            if (rim_stamp[c] == stamp || ptl_stamp[c] == stamp) partial[p->get_id()] = true;
+            if (chebyshev(c, head) == R) clipped[p->get_id()] = true;
         }
     }
+    if (K.reach_clip && K.reach_clip_portal)
+        for (int c : visible_cells) {
+            if (!occupied(c) || !occ_enemy[c] || ptl_stamp[c] != stamp || clipped.count(occ_id[c])) continue;
+            bool pred = false;
+            for (int d = 0; d < 4 && !pred; ++d) {
+                bool en;
+                int const ek = edge_key(c, d, en);
+                int n = adj(c, d);
+                if ((en ? edge_n : edge_w)[ek] == 0 && occupied(n) && occ_id[n] == occ_id[c] && !occ_head[n] && adj(n, occ_dir[n]) == c) pred = true;
+            }
+            if (!pred) clipped[occ_id[c]] = true;
+        }
     for (int c : visible_cells) {
         if (!occupied(c) || !occ_head[c] || occ_id[c] == my_id) continue;
-        if (occ_enemy[c]) enemies.push_back({c, seg_count[occ_id[c]]});
+        if (occ_enemy[c]) enemies.push_back({c, seg_count[occ_id[c]], clipped.count(occ_id[c]) > 0});
         else friend_heads.push_back(c);
     }
 
-    history.push_front(head);
+    if (!K.history_dedupe || history.empty() || history.front() != head) history.push_front(head);
     while ((int)history.size() > L) history.pop_back();
     {
         std::vector<int> chain{head};
@@ -253,6 +422,11 @@ void turn(unswbc::Controller& ct) {
             for (int d = 0; d < 4 && nxt < 0; ++d) {
                 int n = adj(cur, d);
                 if (!occupied(n) || occ_id[n] != my_id || occ_head[n]) continue;
+                if (K.chain_plain) {
+                    bool en;
+                    int const ek = edge_key(cur, d, en);
+                    if ((en ? edge_n : edge_w)[ek] != 0) continue;
+                }
                 if (std::find(chain.begin(), chain.end(), n) != chain.end()) continue;
                 auto const* t = ct.get_tile(unswbc::Position(cx(n), cy(n)));
                 if (!t || !t->get_dragon()) continue;
@@ -263,20 +437,49 @@ void turn(unswbc::Controller& ct) {
             chain.push_back(nxt); cur = nxt;
         }
         for (int s = 0; s < (int)chain.size(); ++s) self_seg[chain[s]] = s;
-        if ((int)history.size() == L && history[chain.size() - 1] == chain.back()) {
-            for (int s = (int)chain.size(); s < L; ++s) {
+        if (K.history_seed && chain.size() > history.size() && std::equal(history.begin(), history.end(), chain.begin()))
+            history.assign(chain.begin(), chain.end());
+        int const known = K.history_young ? std::min(L, (int)history.size()) : ((int)history.size() == L ? L : 0);
+        if ((int)chain.size() <= known && history[chain.size() - 1] == chain.back()) {
+            for (int s = (int)chain.size(); s < known; ++s) {
                 int c = history[s];
                 if (!occupied(c)) { occ_stamp[c] = stamp; occ_id[c] = my_id; occ_head[c] = 0; occ_enemy[c] = 0; self_seg[c] = s; }
+                else if (K.chain_plain && occ_id[c] == my_id && !occ_head[c] && self_seg[c] < 0) self_seg[c] = s;
             }
         }
         for (int c : visible_cells)
             if (occupied(c) && occ_id[c] == my_id && self_seg[c] < 0 && !occ_head[c]) self_seg[c] = -1;
+    }
+    if (K.trap_model && (feed_phase || !K.trap_model_feed)) {
+        for (int c : visible_cells) {
+            if (!occupied(c) || occ_id[c] == my_id || occ_head[c] || rim_stamp[c] == stamp || ptl_stamp[c] == stamp) continue;
+            int const id = occ_id[c];
+            bool pred = false;
+            for (int d = 0; d < 4 && !pred; ++d) {
+                int n = adj(c, d);
+                if (occupied(n) && occ_id[n] == id && !occ_head[n] && adj(n, occ_dir[n]) == c) pred = true;
+            }
+            if (pred) continue;
+            int cur = c;
+            for (int j = 0; j < VS * VS; ++j) {
+                ff_stamp[cur] = stamp; ff_free[cur] = j + 1 + K.model_slack;
+                if (occ_head[cur]) break;
+                int const fd = occ_dir[cur];
+                int const key = fd == 0 ? cur : fd == 2 ? adj(cur, 2) : fd == 3 ? cur : adj(cur, 1);
+                if (((fd == 0 || fd == 2) ? edge_n[key] : edge_w[key]) != 0) break;
+                int nxt = adj(cur, fd);
+                if (!occupied(nxt) || occ_id[nxt] != id || ff_stamp[nxt] == stamp) break;
+                cur = nxt;
+            }
+        }
     }
     int tail = -1;
     for (int c : visible_cells) if (occupied(c) && occ_id[c] == my_id && self_seg[c] == L - 1) tail = c;
     if (tail < 0 && (int)history.size() == L && self_seg[history[L - 1]] == L - 1) tail = history[L - 1];
 
     for (uint64_t m : ct.get_sonar_messages()) {
+        int pa, pb; bool pn;
+        if (decode_pair(m, pa, pb, pn)) { hear_pair(pa, pb, pn); continue; }
         int id; Report r;
         if (!decode(m, id, r) || id == my_id) continue;
         if (id == ENEMY_ID) {
@@ -289,7 +492,22 @@ void turn(unswbc::Controller& ct) {
     reports[my_id] = {L, head, round_num};
     for (int c : friend_heads) {
         auto it = reports.find(occ_id[c]);
-        if (it != reports.end()) { it->second.cell = c; it->second.round = round_num; it->second.len = std::max(it->second.len, seg_count[occ_id[c]]); }
+        if (it == reports.end()) continue;
+        int const vis = seg_count[occ_id[c]];
+        if (!K.sight_refresh) { it->second.cell = c; it->second.round = round_num; it->second.len = std::max(it->second.len, vis); continue; }
+        it->second.cell = c;
+        if (!partial.count(occ_id[c]) || vis > it->second.len) { it->second.len = vis; it->second.round = round_num; }
+        else if (K.sight_partial) it->second.round = round_num;
+    }
+    if (K.tombstone) {
+        for (auto& [id, r] : reports) {
+            if (id == my_id || r.len == 0 || r.round < round_num - STALE) continue;
+            if (chebyshev(head, r.cell) + (round_num - r.round) > R - 1) continue;
+            bool seen = false;
+            for (int c : friend_heads) if (occ_id[c] == id) seen = true;
+            if (K.tombstone_body && seg_count.count(id)) seen = true;
+            if (!seen) r = {0, r.cell, round_num};
+        }
     }
     for (auto it = reports.begin(); it != reports.end();) {
         if (it->second.round < round_num - 3 * STALE) it = reports.erase(it); else ++it;
@@ -313,8 +531,31 @@ void turn(unswbc::Controller& ct) {
         for (auto const& e : enemies)
             if (e.len >= std::max(5, L + 2) && e.len > best_len) { best_len = e.len; hunt = e.head; }
     }
+    int guard_head = -1;
+    if (K.guard_radius > 0 && feed_phase && !am_champion && champ_head >= 0 && hunt < 0) {
+        int best_d = K.guard_radius + 1;
+        int const glen = !K.guard_fresh || !champ_visible ? reports[champ].len
+                         : partial.count(champ) ? std::max(seg_count[champ], reports[champ].len) : seg_count[champ];
+        bool const gok = !K.guard_fresh || ((champ_visible || reports[champ].round >= round_num - 1) && L < glen);
+        for (auto const& e : enemies) {
+            int const d = manhattan(e.head, champ_head);
+            if (gok && e.len < glen && d < best_d && (K.guard_chase || manhattan(head, e.head) <= std::max(1, std::min(3, L - 1)))) {
+                best_d = d; guard_head = e.head;
+            }
+        }
+        if (K.guard_chase) hunt = guard_head;
+    }
+    bool const guard = guard_head >= 0;
 
-    if (feed_phase && !am_champion && champ_visible && hunt < 0 && round_num <= K.feed_last_round &&
+    bool feed_blocked = false;
+    if (K.feed_guard && champ_visible) {
+        int const vis = seg_count[champ];
+        int const clen = partial.count(champ) ? std::max(vis, reports[champ].len) : vis;
+        if (clen < L + K.feed_margin) feed_blocked = true;
+        if (turns_alive <= K.feed_min_age && vis < L + K.feed_margin) feed_blocked = true;
+        if (K.feed_self_frac > 0 && L >= 6 && L > K.feed_self_frac * clen) feed_blocked = true;
+    }
+    if (feed_phase && !am_champion && champ_visible && !feed_blocked && hunt < 0 && !guard && round_num <= K.feed_last_round &&
         chebyshev(head, champ_head) <= 2) {
         int near = 0;
         for (int c : visible_cells) if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3) ++near;
@@ -324,9 +565,55 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
+    bool open_end = false;
+    for (auto const& [id, ends] : portals)
+        for (auto const& e : ends) if ((e.north ? partner_n : partner_w)[e.cell] < 0) open_end = true;
+    bool champ_lost = false;
+    if (K.portal_feed && K.portal_explore > 0 && open_end && feed_phase && !am_champion && champ_head >= 0 && !champ_visible) {
+        bfs(head, L, N);
+        champ_lost = true;
+        for (int d = 0; d < 4; ++d) if (dist[adj(champ_head, d)] < INF) champ_lost = false;
+    }
+    bool const portal_ok = K.portal_explore > 0 && open_end && !am_champion && L <= K.portal_max_len && (!feed_phase || champ_lost) &&
+                           (!K.portal_need_tail || tail >= 0) &&
+                           (K.portal_region <= 0 || feed_phase || plain_region(head, K.portal_region) <= K.portal_region);
+
+    auto threat = [&](int c, bool grown) { return threat_at[c] != stamp ? INF : grown ? threat_le[c] : threat_lt[c]; };
+    if (K.reach_cap > 0) {
+        static std::vector<int> rq;
+        for (auto const& e : enemies) {
+            if (e.len > L) continue;
+            bool const shorter = e.len < L;
+            int pearl = 0;
+            for (int d = 0; d < 4; ++d) {
+                int n = step(e.head, d);
+                if (n >= 0 && !occupied(n) && pearl_seen[n] == round_num) pearl = 1;
+            }
+            int const r = std::max(1, std::min((K.reach_clip && (e.clipped || e.len < 2) ? K.reach_cap : e.len - 1) + pearl, K.reach_cap));
+            ++reach_id;
+            reach_mark[e.head] = reach_id; reach_dist[e.head] = 0;
+            rq.clear(); rq.push_back(e.head);
+            for (size_t qi = 0; qi < rq.size(); ++qi) {
+                int c = rq[qi];
+                if (reach_dist[c] > r + (K.reach_champ_far > 0 ? 1 : 0)) continue;
+                for (int d = 0; d < 4; ++d) {
+                    int n = step(c, d);
+                    if (n < 0 || reach_mark[n] == reach_id) continue;
+                    reach_mark[n] = reach_id; reach_dist[n] = reach_dist[c] + 1;
+                    int const sl = reach_dist[n] - r;
+                    if (threat_at[n] != stamp) { threat_at[n] = stamp; threat_lt[n] = INF; threat_le[n] = INF; }
+                    threat_le[n] = std::min(threat_le[n], sl);
+                    if (shorter) threat_lt[n] = std::min(threat_lt[n], sl);
+                    if (!occupied(n)) rq.push_back(n);
+                }
+            }
+        }
+    }
+
     struct Target { int cell; double value; int not_before; };
     std::vector<Target> targets;
     auto pearl_value = [&](int c) -> double {
+        if (K.reach_cap > 0 && (am_champion || L >= K.reach_pearl_len) && threat(c, true) <= 1) return 0;
         if (feed_phase && !am_champion) {
             if (champ_head >= 0 && chebyshev(c, champ_head) <= 4) return 0;
             return (L % 2 == 0) ? 0.5 : 0.1;
@@ -342,7 +629,7 @@ void turn(unswbc::Controller& ct) {
             if (v > 0) targets.push_back({c, v, 0});
         } else if (spawn_at[c] > round_num && spawn_at[c] <= round_num + 12 && !occupied(c)) {
             double v = 0.6 * pearl_value(c);
-            if (v > 0) targets.push_back({c, v, spawn_at[c] - round_num});
+            if (v > 0) targets.push_back({c, v, spawn_at[c] - round_num + K.spawn_lead});
         }
     }
     if (K.fountain_value > 0) {
@@ -360,7 +647,7 @@ void turn(unswbc::Controller& ct) {
         (champ_head < 0 || manhattan(head, sighting.cell) < manhattan(head, champ_head))) {
         for (int d = 0; d < 4; ++d) targets.push_back({adj(sighting.cell, d), 2.8, 0});
     }
-    if (feed_phase && !am_champion && champ_head >= 0) {
+    if (feed_phase && !am_champion && champ_head >= 0 && !feed_blocked) {
         for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0}); }
         for (int d = 0; d < 4; ++d) { int n = adj(adj(champ_head, d), d); targets.push_back({n, 2.5, 0}); }
     }
@@ -370,18 +657,54 @@ void turn(unswbc::Controller& ct) {
             else if (seen_round[c] < round_num - 80) targets.push_back({c, 0.5 * K.explore_value, 0});
         }
     }
+    if (portal_ok && K.portal_entry > 0) {
+        for (auto const& [id, ends] : portals)
+            for (auto const& e : ends) {
+                if ((e.north ? partner_n : partner_w)[e.cell] >= 0) continue;
+                int const beside = e.north ? adj(e.cell, 0) : adj(e.cell, 3);
+                if (!occupied(e.cell)) targets.push_back({e.cell, K.portal_entry, 0});
+                if (!occupied(beside)) targets.push_back({beside, K.portal_entry, 0});
+            }
+    }
     if (waypoint < 0 || round_num - waypoint_set > 40 || chebyshev(head, waypoint) <= 2) {
         waypoint = int(rng.next() % uint64_t(N)); waypoint_set = round_num;
     }
     targets.push_back({waypoint, 0.1, 0});
 
+    int const units = ct.get_unit_count();
     int const need = am_champion ? std::max(12, std::min(2 * L, 120)) : std::max(6, std::min(L + 4, 30));
     int const cap = std::max(need * 2, 60);
+    int edge = int(friend_heads.size()) + 1 - int(enemies.size());
+    if (K.ram_gate && K.eq_window > 0) {
+        for (auto const& e : enemies) foe_seen[occ_id[e.head]] = round_num;
+        for (int f : friend_heads) pal_seen[occ_id[f]] = round_num;
+        int foes = 0, pals = 1;
+        for (auto const& [id, r] : foe_seen) if (r >= round_num - K.eq_window) ++foes;
+        for (auto const& [id, r] : pal_seen) if (r >= round_num - K.eq_window) ++pals;
+        edge = pals - foes;
+    }
+    auto ram_ok = [&](int elen, int cell) {
+        if (!K.ram_gate) return elen >= L || cell == hunt || cell == guard_head;
+        if (units < K.ram_min_units) return false;
+        if (cell == hunt || cell == guard_head || elen > L) return units >= K.ram_long_units;
+        if (elen < L) return false;
+        if (units >= unswbc::game->get_unit_limit() - K.eq_free_gap || (K.eq_feed && feed_phase)) return true;
+        return units >= K.eq_min_units && edge >= K.eq_local;
+    };
     Plan best;
     Plan fallback;
+    Plan declined;
     int const facing = dir_index(ct.get_dir());
     std::vector<double> areas(4, 0);
+    auto is_trap = [&](int area, int eff_len) {
+        bool const roomy = K.cycle_test ? (bfs_cycle && area >= 2 * eff_len + 4) : area >= std::max(2 * eff_len, 16);
+        int horizon = std::max(20, eff_len + 4);
+        if (K.horizon_cap) horizon = std::min(horizon, unswbc::Constants::MAX_ROUNDS - round_num + K.horizon_slack);
+        return bfs_depth < horizon && !roomy;
+    };
+    std::vector<int> portal_dirs;
     for (int d = 0; d < 4; ++d) {
+        if (K.no_reverse && d == (facing + 2) % 4) continue;
         bool via_portal = false;
         int t = step(head, d, &via_portal);
         if (t < 0) {
@@ -391,6 +714,7 @@ void turn(unswbc::Controller& ct) {
                 kelp = ((d == 0 || d == 2) ? edge_n[key] : edge_w[key]) == 1;
             }
             if (!kelp && !fallback.valid) { fallback.valid = true; fallback.dir = d; fallback.score = -1e9; }
+            if (!kelp && via_portal && portal_ok) portal_dirs.push_back(d);
             continue;
         }
         Plan p; p.dir = d;
@@ -398,7 +722,10 @@ void turn(unswbc::Controller& ct) {
             bool enemy_head = occ_head[t] && occ_enemy[t];
             if (!enemy_head || am_champion) continue;
             int elen = seg_count[occ_id[t]];
-            if (elen < L && t != hunt) continue;
+            if (!ram_ok(elen, t)) {
+                if (K.ram_gate && elen >= L && !declined.valid) { declined = p; declined.valid = true; declined.attack = true; declined.trap = true; }
+                continue;
+            }
             p.valid = true; p.attack = true; p.score = 500 + 10 * elen;
             if (p.score > best.score) best = p;
             continue;
@@ -407,21 +734,75 @@ void turn(unswbc::Controller& ct) {
         int area = bfs(t, eff_len, cap);
         areas[d] = area;
         double s = 0;
+        bool danger = false;
         int const depth = bfs_depth;
-        bool const roomy = K.cycle_test ? (bfs_cycle && area >= 2 * eff_len + 4) : area >= std::max(2 * eff_len, 16);
-        bool const trap = depth < std::max(20, eff_len + 4) && !roomy;
-        if (trap) s -= 50000 + 100.0 * (20 - std::min(depth, 20)) + 50.0 * std::max(0, 16 - area);
+        bool const trap = is_trap(area, eff_len);
+        bool harvest = false;
+        if (K.pocket_harvest && trap && !am_champion && !feed_phase && ct.get_unit_count() < unswbc::game->get_unit_limit()) {
+            int food = 0;
+            bool clear = true;
+            for (int q = 0; q < N; ++q) {
+                if (dist[q] >= INF) continue;
+                if (pearl_seen[q] == round_num || quick_seen[q] >= 3) ++food;
+                if (K.harvest_clear && clear)
+                    for (int e = 0; e < 4; ++e) { int n = step(q, e); if (n >= 0 && occupied(n) && occ_id[n] != my_id) clear = false; }
+            }
+            harvest = clear && (!K.harvest_tube || area == depth) && food >= K.harvest_pearls && L + food >= 4 &&
+                      (!K.harvest_depth_check || L + food - 1 >= depth);
+            for (auto const& e : enemies) if (manhattan(t, e.head) <= K.harvest_enemy_dist) harvest = false;
+        }
+        if (harvest) s -= K.harvest_cost;
+        else if (trap) s -= 50000 + 100.0 * (20 - std::min(depth, 20)) + 50.0 * std::max(0, 16 - area);
         else if (area < need) s -= (am_champion ? 40.0 : 8.0) * (need - area);
         for (auto const& e : enemies) {
             int md = manhattan(t, e.head);
-            if (md == 1) s -= am_champion ? 5000 : (e.len >= L ? 1 : 6);
+            if (md == 1) s -= am_champion ? 5000 : (e.len >= L ? (ram_ok(e.len, e.head) ? 1 : K.eq_avoid) : 6);
             else if (md == 2 && am_champion) s -= 150;
+            bool touch = md == 1;
+            if (K.danger_step) {
+                touch = false;
+                for (int f = 0; f < 4 && !touch; ++f) touch = step(e.head, f) == t;
+            }
+            if (touch) danger = true;
+            if (K.reach_cap > 0 && !am_champion && e.len < eff_len && units < K.reach_adj_units)
+                for (int f = 0; f < 4; ++f) if (step(e.head, f) == t) { s -= K.reach_adj + K.reach_adj_len * L; break; }
+        }
+        if (K.reach_cap > 0) {
+            int const sl = threat(t, eff_len > L);
+            bool const big = am_champion || L >= K.reach_long_len;
+            if (big && sl <= 0) { danger = danger || K.hold_danger >= 2; s -= am_champion ? K.reach_champ : K.reach_long * L; }
+            else if (big && sl == 1) s -= am_champion ? K.reach_champ_edge : K.reach_long_edge;
+            else if (am_champion && sl == 2) s -= K.reach_champ_far;
+            if (big && sl <= 1 && (am_champion ? K.reach_corner : K.reach_corner_long) > 0) {
+                int esc = -INF;
+                for (int f = 0; f < 4; ++f) {
+                    int n = step(t, f);
+                    if (n < 0 || n == head || occupied(n)) continue;
+                    esc = std::max(esc, threat(n, eff_len > L));
+                }
+                if (esc <= 1) s -= am_champion ? K.reach_corner : K.reach_corner_long * L;
+            }
         }
         for (int f : friend_heads) {
             int md = manhattan(t, f);
             bool is_champ = feed_phase && occ_id[f] == champ;
             if (md <= 1) s -= is_champ ? 800 : (am_champion ? 200 : 12);
             else if (md == 2 && am_champion) s -= 20;
+        }
+        if (via_portal && seen_round[t] != round_num) {
+            s -= am_champion ? K.champ_blind_land : K.blind_land;
+            if (K.young_blind_land > 0 && (int)history.size() < L) s -= K.young_blind_land * double(L - (int)history.size()) / L;
+            if ((am_champion ? K.champ_blind_land : K.blind_land) > 0)
+                for (auto const& [id, r] : reports)
+                    if (id != my_id && r.round >= round_num - 1 && manhattan(r.cell, t) <= 1)
+                        s -= (feed_phase && id == champ) ? 800 : (am_champion ? 200 : 12);
+        }
+        if (am_champion && K.champ_portal_cell > 0) {
+            for (int e = 0; e < 4; ++e) {
+                bool en;
+                int const ek = edge_key(t, e, en);
+                if ((en ? edge_n : edge_w)[ek] == 2) { s -= K.champ_portal_cell; break; }
+            }
         }
         double tv = 0;
         for (auto const& g : targets) {
@@ -450,12 +831,18 @@ void turn(unswbc::Controller& ct) {
             }
             if (exits <= 1) s -= K.exit_penalty * (1 + contested);
         }
+        if (K.spawn_block > 0 && spawn_at[t] > round_num && spawn_at[t] - round_num <= eff_len && pearl_seen[t] != round_num)
+            s -= K.spawn_block;
         if (d == facing) s += 1.0;
         s += double(rng.next() % 100) / 1000.0;
-        p.valid = true; p.score = s; p.trap = trap;
+        p.valid = true; p.score = s; p.trap = trap; p.harvest = harvest; p.danger = danger;
         if (p.score > best.score) best = p;
     }
-
+    for (int d : portal_dirs) {
+        Plan p; p.dir = d; p.valid = true;
+        p.score = K.portal_explore + (d == facing ? 1.0 : 0.0) + double(rng.next() % 100) / 1000.0;
+        if (p.score > best.score) best = p;
+    }
     auto tail_exit = [&]() {
         for (int d = 0; d < 4; ++d) {
             int n = step(tail, d);
@@ -465,14 +852,83 @@ void turn(unswbc::Controller& ct) {
         }
         return false;
     };
-    if (K.escape_split && (!best.valid || best.trap) && L >= 4 && ct.can_split(L - 2) &&
-        (tail < 0 || !best.valid || tail_exit())) {
+    auto delaying = [&](Plan const& b) {
+        return K.pocket_delay && (K.delay_in_feed || !feed_phase) && b.valid && b.trap && !b.attack &&
+               pearl_seen[step(head, b.dir)] == round_num && tail >= 0 && tail_exit();
+    };
+    auto tail_ok = [&](Plan const& b) {
+        return tail < 0 ? !(K.split_need_tail && feed_phase && !(K.hold_danger > 0 && K.hold_danger_tail && b.trap && b.danger)) : tail_exit();
+    };
+    if (declined.valid && !best.attack &&
+        ((!best.valid && !fallback.valid) ||
+         (K.ram_trap && units >= K.ram_min_units && best.valid && best.trap && !best.harvest &&
+          !(K.escape_split && L >= 4 && ct.can_split(L - 2) && (!K.ram_escape_full || delaying(best) || tail_ok(best))))))
+        best = declined;
+
+    auto note_split = [&](int k) {
+        if (K.split_report) reports[my_id].len = L - k;
+        if (K.split_shout > 0) shout_until = turns_alive + K.split_shout - 1;
+    };
+    bool split_hold = best.valid && !(best.attack && best.trap) && !(K.hold_danger > 0 && best.trap && best.danger) && (feed_phase || !K.split_guard_feed) && (L >= K.split_guard_len || (K.split_guard_champ && am_champion));
+    if (split_hold && best.trap && K.split_guard_mode == 1) {
+        bool open = false;
+        bfs_terrain = true;
+        for (int d = 0; d < 4 && !open; ++d) {
+            int t = step(head, d);
+            if (t < 0 || occupied(t)) continue;
+            int const eff_len = L + (pearl_seen[t] == round_num ? 1 : 0);
+            int area = bfs(t, eff_len, cap);
+            if (!is_trap(area, eff_len)) open = true;
+        }
+        bfs_terrain = false;
+        if (!open) split_hold = false;
+    }
+    bool const delay_escape = delaying(best);
+    if (K.sprint_ram && !am_champion && !best.attack && L >= 3 && (L <= K.sprint_max_len || guard) && !enemies.empty() &&
+        ct.get_unit_count() > K.sprint_min_units) {
+        int const maxn = std::min(K.sprint_steps, L - 1);
+        std::vector<std::array<int, 4>> nodes{{head, -1, -1, 0}};
+        int best_node = -1, best_last = -1, best_elen = 0, best_steps = 0;
+        for (size_t qi = 0; qi < nodes.size(); ++qi) {
+            int const c = nodes[qi][0], k = nodes[qi][3];
+            for (int d = 0; d < 4; ++d) {
+                if (K.no_reverse && k == 0 && d == (facing + 2) % 4) continue;
+                int n = step(c, d);
+                if (n < 0) continue;
+                if (occupied(n)) {
+                    if (k < 1 || !occ_head[n] || !occ_enemy[n]) continue;
+                    int const elen = seg_count[occ_id[n]];
+                    int const worth = (guard && n == guard_head) ? INF : (elen >= L + K.sprint_margin && L <= K.sprint_max_len) ? elen : 0;
+                    if (worth > 0 && (worth > best_elen || (worth == best_elen && k + 1 < best_steps))) {
+                        best_elen = worth; best_steps = k + 1; best_node = int(qi); best_last = d;
+                    }
+                    continue;
+                }
+                if (k + 1 >= maxn) continue;
+                bool seen = false;
+                for (auto const& q : nodes) if (q[0] == n) { seen = true; break; }
+                if (!seen) nodes.push_back({n, int(qi), d, k + 1});
+            }
+        }
+        if (best_node >= 0) {
+            std::vector<Direction> moves{DIRS[best_last]};
+            for (int q = best_node; nodes[q][1] >= 0; q = nodes[q][1]) moves.push_back(DIRS[nodes[q][2]]);
+            std::reverse(moves.begin(), moves.end());
+            ct.make_moves(moves);
+            ct.set_indicator_string("sprint");
+            goto sonar;
+        }
+    }
+    if (K.escape_split && !delay_escape && (!best.valid || best.trap) && !split_hold && L >= 4 && ct.can_split(L - 2) &&
+        (!best.valid || tail_ok(best))) {
         ct.do_split(L - 2);
+        note_split(L - 2);
         ct.set_indicator_string("escape");
+        split_turn = true;
         goto sonar;
     }
 
-    if (am_champion && best.valid && !best.attack && areas[best.dir] < need / 2 && L >= 6 && tail >= 0 &&
+    if (am_champion && best.valid && !best.attack && !(K.uturn_guard && split_hold) && areas[best.dir] < need / 2 && L >= 6 && tail >= 0 &&
         ct.get_unit_count() < unswbc::game->get_unit_limit()) {
         int tail_area = 0;
         for (int d = 0; d < 4; ++d) {
@@ -481,6 +937,7 @@ void turn(unswbc::Controller& ct) {
         }
         if (tail_area > 2 * areas[best.dir] && tail_area >= need / 2) {
             ct.do_split(L - 2);
+            note_split(L - 2);
             ct.set_indicator_string("uturn");
             return;
         }
@@ -512,15 +969,24 @@ void turn(unswbc::Controller& ct) {
         for (auto const& e : enemies) if (manhattan(head, e.head) <= 1) threatened = true;
         if (!threatened && !(best.valid && best.attack)) {
             ct.do_split(2);
+            note_split(2);
             ct.set_indicator_string("split");
+            split_turn = true;
             goto sonar;
         }
     }
 
-    if (best.valid) ct.make_move(DIRS[best.dir]);
+    if (best.valid) {
+        ct.make_move(DIRS[best.dir]);
+        bool vp = false, pn = false;
+        if (step(head, best.dir, &vp) >= 0 && vp) {
+            int const key = edge_key(head, best.dir, pn);
+            for (auto& pr : pairs) if (pr.north == pn && (pr.a == key || pr.b == key)) pr.last = round_num;
+        }
+    }
     else if (fallback.valid) ct.make_move(DIRS[fallback.dir]);
     else if (!K.boxed_suicide) ct.make_move(DIRS[facing]);
-    ct.set_indicator_string(!best.valid ? (fallback.valid ? "XP" : "XF") : best.trap ? "T" : am_champion ? "C" : hunt >= 0 ? "H" : (feed_phase ? "F" : "W"));
+    ct.set_indicator_string(!best.valid ? (fallback.valid ? "XP" : "XF") : best.trap ? (best.harvest ? "HV" : delay_escape ? "D" : "T") : am_champion ? "C" : hunt >= 0 ? "H" : (feed_phase ? "F" : "W"));
 
 sonar:
     {
@@ -528,8 +994,25 @@ sonar:
         uint64_t mine = encode(my_id, reports[my_id]);
         uint64_t best_msg = b >= 0 ? encode(b, reports[b]) : mine;
         uint64_t enemy_msg = sighting_fresh() ? encode(ENEMY_ID, sighting) : best_msg;
-        for (int d = 0; d < 4; ++d)
-            ct.send_sonar(DIRS[d], d == round_num % 4 ? mine : d == (round_num + 2) % 4 ? enemy_msg : best_msg);
+        int gossip_dir = -1, share_dir = -1;
+        uint64_t gossip_msg = 0, share_msg = 0;
+        bool const shout = turns_alive <= shout_until;
+        if (K.portal_gossip > 0 && !shout && !pairs.empty() && round_num % K.portal_gossip == 0) {
+            gossip_dir = (round_num + 1) % 4;
+            gossip_msg = encode_pair(pairs[size_t(round_num / K.portal_gossip + my_id) % pairs.size()]);
+        }
+        if (K.portal_share && split_turn && !pairs.empty()) {
+            PairRec const* pick = &pairs[0];
+            for (auto const& pr : pairs) if (pr.last > pick->last) pick = &pr;
+            share_dir = (facing + 2) % 4;
+            share_msg = encode_pair(*pick);
+        }
+        for (int d = 0; d < 4; ++d) {
+            uint64_t msg = shout || d == round_num % 4 ? mine : d == (round_num + 2) % 4 ? enemy_msg : best_msg;
+            if (d == gossip_dir) msg = gossip_msg;
+            if (d == share_dir) msg = share_msg;
+            ct.send_sonar(DIRS[d], msg);
+        }
     }
 }
 
@@ -542,11 +1025,14 @@ int main() {
     rng.s ^= uint64_t(my_id + 1) * 0x9E3779B97F4A7C15ull;
     for (int i = 0; i < 4; ++i) rng.next();
     edge_n.assign(N, 0); edge_w.assign(N, 0); portal_n.assign(N, -1); portal_w.assign(N, -1);
+    partner_n.assign(N, -1); partner_w.assign(N, -1);
     decay[0] = 1; for (int k = 1; k < 256; ++k) decay[k] = k == 1 ? 1 : decay[k - 1] * 0.88;
     seen_round.assign(N, -1);
     pearl_seen.assign(N, -1); spawn_at.assign(N, -1); quick_seen.assign(N, 0); quick_round.assign(N, -1);
     occ_stamp.assign(N, 0); occ_id.assign(N, -1); self_seg.assign(N, -1);
-    occ_head.assign(N, 0); occ_enemy.assign(N, 0); dist.assign(N, INF);
+    occ_head.assign(N, 0); occ_enemy.assign(N, 0); occ_dir.assign(N, 0); dist.assign(N, INF); region_mark.assign(N, 0);
+    ff_stamp.assign(N, 0); ff_free.assign(N, 0); rim_stamp.assign(N, 0); ptl_stamp.assign(N, 0);
+    threat_at.assign(N, 0); threat_lt.assign(N, INF); threat_le.assign(N, INF); reach_mark.assign(N, 0); reach_dist.assign(N, 0);
 
     while (unswbc::update(ct, game)) {
         turn(ct);

@@ -4,8 +4,9 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={Path.home()}/.ssh/cm-bc-%C", "-o", "ControlPersist=600"]
+SSH_BASE = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+SSH_MUX = ["-o", "ControlMaster=auto", "-o", f"ControlPath={Path.home()}/.ssh/cm-bc-%C", "-o", "ControlPersist=600"]
+SSH_OPTS = SSH_BASE + SSH_MUX
 
 RUNNER = r'''
 import json, os, subprocess, sys
@@ -18,8 +19,8 @@ for b in bots:
     subprocess.run(cmd(["maps/arena.map", b, b, "--no-replay", "--seed", "1"]), capture_output=True, text=True, env=env)
 def play(job):
     i, mp, a, b, seed, out = job
-    text = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), capture_output=True, text=True, env=env).stdout
-    return i, text
+    r = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), capture_output=True, text=True, env=env, errors="replace")
+    return i, r.stdout[-1500:] + ("" if "wins after" in r.stdout or "draw after" in r.stdout else "\nSTDERR " + r.stderr[-800:])
 with ThreadPoolExecutor(j) as pool:
     for i, text in pool.map(play, jobs):
         print(json.dumps([i, text[-2000:]]), flush=True)
@@ -69,16 +70,25 @@ class Remote:
             spec, self.j = m.group(1), int(m.group(2))
         self.user, _, self.host = spec.rpartition("@")
         self.name = spec
+        self.mux = not self.wsl
+        self.reported = False
 
-    def argv(self, command):
+    def argv(self, command, mux=None):
         b64 = base64.b64encode(command.encode()).decode()
         remote = f"wsl --exec /usr/local/bin/bcrun {b64}" if self.wsl else f'bash -lc "$(echo {b64} | base64 -d)"'
         login = ["-l", self.user] if self.user else []
-        return ["ssh", *SSH_OPTS, *login, self.host, remote]
+        opts = SSH_BASE + (SSH_MUX if (self.mux if mux is None else mux) else [])
+        return ["ssh", *opts, *login, self.host, remote]
 
 
 def ssh(host, command, **kw):
-    return subprocess.run(host.argv(command), **kw)
+    kw.setdefault("capture_output", True)
+    if kw.get("text"):
+        kw.setdefault("errors", "replace")
+    r = subprocess.run(host.argv(command), **kw)
+    if r.returncode == 255 and host.mux:
+        r = subprocess.run(host.argv(command, mux=False), **kw)
+    return r
 
 
 def sync(host, ws, bots):
@@ -91,12 +101,12 @@ def sync(host, ws, bots):
                 if skip & set(path.relative_to(ROOT).parts):
                     continue
                 tar.add(path, arcname=str(path.relative_to(ROOT)), recursive=False)
-    r = ssh(host, f"mkdir -p {ws}/replays/arena && tar -x -C {ws}", input=buf.getvalue(), capture_output=True)
+    r = ssh(host, f"mkdir -p {ws}/replays/arena && tar -x -C {ws}", input=buf.getvalue())
     return r.returncode == 0
 
 
 def fetch(host, ws):
-    r = ssh(host, f"cd {ws} && tar -c replays && cd && rm -rf {ws}", capture_output=True)
+    r = ssh(host, f"cd {ws} && tar -c replays && cd && rm -rf {ws}")
     if r.returncode == 0 and r.stdout:
         with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tar:
             tar.extractall(ROOT, filter="data")
@@ -164,17 +174,31 @@ def main():
         spec = [[i, str(jobs[i][1].relative_to(ROOT)), jobs[i][2], jobs[i][3], jobs[i][4],
                  str(replay_path(jobs[i][1], jobs[i][2], jobs[i][3], jobs[i][4]))] for i in sorted(remote_ids) if owner[i] is r]
         payload = json.dumps([spec, bots, r.j, args.sandbox])
-        proc = subprocess.Popen(r.argv(f"cd {r.ws} && python3 - {shlex.quote(payload)}"),
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-        proc.stdin.write(RUNNER)
-        proc.stdin.close()
-        for line in proc.stdout:
-            try:
-                i, text = json.loads(line)
-            except ValueError:
-                continue
-            record(i, parse(text))
-        proc.wait()
+        command = f"cd {r.ws} && python3 - {shlex.quote(payload)}"
+        for mux in ([True, False] if r.mux else [False]):
+            got = 0
+            proc = subprocess.Popen(r.argv(command, mux=mux), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, errors="replace")
+            proc.stdin.write(RUNNER)
+            proc.stdin.close()
+            for line in proc.stdout:
+                try:
+                    i, text = json.loads(line)
+                except ValueError:
+                    continue
+                outcome = parse(text)
+                if outcome[0] == "error" and not r.reported:
+                    r.reported = True
+                    print(f"{r.host}: a game failed: {text.strip()[-600:]}", file=sys.stderr)
+                record(i, outcome)
+                got += 1
+            err = proc.stderr.read()
+            proc.wait()
+            if got:
+                break
+            print(f"{r.host}: no results (exit {proc.returncode}): {err.strip()[-600:]}", file=sys.stderr)
+            if proc.returncode != 255:
+                break
         fetch(r, r.ws)
 
     threads = [threading.Thread(target=run_remote, args=(r,)) for r in remotes]
