@@ -11,7 +11,7 @@ SSH_OPTS = SSH_BASE + SSH_MUX
 RUNNER = r'''
 import json, os, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
-jobs, bots, j, sandbox = json.loads(sys.argv[1])
+jobs, bots, j, sandbox = json.loads(PAYLOAD)
 env = dict(os.environ, PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""))
 def cmd(args):
     return ["nice", "-n", "10", "unswbc", "run", *args] + (["--sandbox"] if sandbox else [])
@@ -174,12 +174,12 @@ def main():
         spec = [[i, str(jobs[i][1].relative_to(ROOT)), jobs[i][2], jobs[i][3], jobs[i][4],
                  str(replay_path(jobs[i][1], jobs[i][2], jobs[i][3], jobs[i][4]))] for i in sorted(remote_ids) if owner[i] is r]
         payload = json.dumps([spec, bots, r.j, args.sandbox])
-        command = f"cd {r.ws} && python3 - {shlex.quote(payload)}"
+        command = f"cd {r.ws} && python3 -"
         for mux in ([True, False] if r.mux else [False]):
             got = 0
             proc = subprocess.Popen(r.argv(command, mux=mux), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, errors="replace")
-            proc.stdin.write(RUNNER)
+            proc.stdin.write(f"PAYLOAD = {payload!r}\n" + RUNNER)
             proc.stdin.close()
             for line in proc.stdout:
                 try:
