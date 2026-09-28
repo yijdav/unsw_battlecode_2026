@@ -19,8 +19,8 @@ constexpr int PEARL_MEMORY = 40;
 constexpr int INF = 1 << 20;
 
 struct Knobs {
-    int feed_start_small = 320;
-    int feed_start_big = 290;
+    int feed_start_small = 370;
+    int feed_start_big = 340;
     int split_at = 4;
     int feed_last_round = 494;
     int crowded_pearls = 3;
@@ -121,6 +121,10 @@ struct Knobs {
     bool guard_fresh = true;
     bool ram_escape_full = true;
     int horizon_slack = 0;
+    double blind_route = 0.3;
+    double exit_calm = 0;
+    int feed_reach = 7;
+    int feed_min_units = 0;
 } K;
 
 int W, H, N;
@@ -280,6 +284,7 @@ struct Plan {
 };
 
 std::vector<int> dist;
+std::vector<uint8_t> bpath;
 double decay[256];
 
 std::vector<int> region_mark;
@@ -305,10 +310,11 @@ int plain_region(int start, int cap) {
 int bfs_depth = 0;
 bool bfs_cycle = false;
 bool bfs_terrain = false;
+uint8_t bfs_blind0 = 0;
 int bfs(int start, int length, int cap) {
     std::fill(dist.begin(), dist.end(), INF);
     static std::vector<int> queue; queue.clear();
-    dist[start] = 1; queue.push_back(start);
+    dist[start] = 1; bpath[start] = bfs_blind0; queue.push_back(start);
     int count = 0, back_edges = 0;
     bfs_depth = 1;
     for (size_t qi = 0; qi < queue.size(); ++qi) {
@@ -316,7 +322,8 @@ int bfs(int start, int length, int cap) {
         bfs_depth = std::max(bfs_depth, dist[c]);
         if (count >= cap) { bfs_depth = INF; break; }
         for (int d = 0; d < 4; ++d) {
-            int n = step(c, d);
+            bool vp = false;
+            int n = step(c, d, &vp);
             if (n < 0) continue;
             if (dist[n] != INF) { ++back_edges; continue; }
             int t = dist[c] + 1;
@@ -327,7 +334,7 @@ int bfs(int start, int length, int cap) {
                 if (s < 0 && bfs_terrain && occ_id[n] != my_id) ok = true;
                 if (!ok) continue;
             }
-            dist[n] = t; queue.push_back(n);
+            dist[n] = t; bpath[n] = bpath[c] | uint8_t(vp && seen_round[n] != round_num); queue.push_back(n);
         }
     }
     bfs_cycle = bfs_depth == INF || back_edges > count - 1;
@@ -555,11 +562,23 @@ void turn(unswbc::Controller& ct) {
         if (turns_alive <= K.feed_min_age && vis < L + K.feed_margin) feed_blocked = true;
         if (K.feed_self_frac > 0 && L >= 6 && L > K.feed_self_frac * clen) feed_blocked = true;
     }
+    if (K.feed_min_units > 0 && ct.get_unit_count() < K.feed_min_units) feed_blocked = true;
     if (feed_phase && !am_champion && champ_visible && !feed_blocked && hunt < 0 && !guard && round_num <= K.feed_last_round &&
         chebyshev(head, champ_head) <= 2) {
         int near = 0;
         for (int c : visible_cells) if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3) ++near;
-        if (near < K.crowded_pearls) {
+        bool reachable = true;
+        if (K.feed_reach > 0 && near < K.crowded_pearls) {
+            bfs(champ_head, 0, N);
+            reachable = false;
+            for (int s = 0; s < (int)history.size() && !reachable; s += 2) {
+                int const c = history[s];
+                if (occupied(c) && occ_id[c] == my_id && self_seg[c] == s && dist[c] - 1 <= K.feed_reach) reachable = true;
+            }
+            for (int c : visible_cells)
+                if (!reachable && occupied(c) && occ_id[c] == my_id && self_seg[c] >= 0 && self_seg[c] % 2 == 0 && dist[c] - 1 <= K.feed_reach) reachable = true;
+        }
+        if (near < K.crowded_pearls && reachable) {
             ct.set_indicator_string("feed");
             return;
         }
@@ -731,7 +750,9 @@ void turn(unswbc::Controller& ct) {
             continue;
         }
         int const eff_len = L + (pearl_seen[t] == round_num ? 1 : 0);
+        bfs_blind0 = uint8_t(via_portal && seen_round[t] != round_num);
         int area = bfs(t, eff_len, cap);
+        bfs_blind0 = 0;
         areas[d] = area;
         double s = 0;
         bool danger = false;
@@ -811,6 +832,7 @@ void turn(unswbc::Controller& ct) {
             if (g.cell == t) dd = 1;
             int eta = std::max(dd, g.not_before);
             double v = g.value * 100.0 * decay[std::min(eta, 255)];
+            if (K.blind_route < 1 && bpath[g.cell]) v *= K.blind_route;
             tv = std::max(tv, v);
         }
         s += tv;
@@ -829,7 +851,7 @@ void turn(unswbc::Controller& ct) {
                     if (m >= 0 && m != t && occupied(m) && occ_head[m] && occ_id[m] != my_id) { ++contested; break; }
                 }
             }
-            if (exits <= 1) s -= K.exit_penalty * (1 + contested);
+            if (exits <= 1) s -= K.exit_penalty * (contested > 0 ? 1 + contested : K.exit_calm);
         }
         if (K.spawn_block > 0 && spawn_at[t] > round_num && spawn_at[t] - round_num <= eff_len && pearl_seen[t] != round_num)
             s -= K.spawn_block;
@@ -1030,7 +1052,7 @@ int main() {
     seen_round.assign(N, -1);
     pearl_seen.assign(N, -1); spawn_at.assign(N, -1); quick_seen.assign(N, 0); quick_round.assign(N, -1);
     occ_stamp.assign(N, 0); occ_id.assign(N, -1); self_seg.assign(N, -1);
-    occ_head.assign(N, 0); occ_enemy.assign(N, 0); occ_dir.assign(N, 0); dist.assign(N, INF); region_mark.assign(N, 0);
+    occ_head.assign(N, 0); occ_enemy.assign(N, 0); occ_dir.assign(N, 0); dist.assign(N, INF); bpath.assign(N, 0); region_mark.assign(N, 0);
     ff_stamp.assign(N, 0); ff_free.assign(N, 0); rim_stamp.assign(N, 0); ptl_stamp.assign(N, 0);
     threat_at.assign(N, 0); threat_lt.assign(N, INF); threat_le.assign(N, INF); reach_mark.assign(N, 0); reach_dist.assign(N, 0);
 
