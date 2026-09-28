@@ -11,12 +11,12 @@ SSH_OPTS = SSH_BASE + SSH_MUX
 RUNNER = r'''
 import json, os, subprocess, sys, threading
 bots, j, sandbox, cache = json.loads(sys.stdin.readline())
-env = dict(os.environ, PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""))
+env = dict(os.environ, PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""), UNSWBC_NO_UPDATE="1")
 def cmd(args):
     return ["nice", "-n", "10", "unswbc", "run", *args] + (["--sandbox"] if sandbox else [])
 for b in bots:
     lock = ["flock", os.path.expanduser(f"~/bc/cache/{cache[b]}.lock")] if b in cache else []
-    subprocess.run(lock + cmd(["maps/arena.map", b, b, "--no-replay", "--seed", "1"]), capture_output=True, text=True, env=env)
+    subprocess.run(lock + cmd(["maps/arena.map", b, b, "--no-replay", "--seed", "1"]), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
 print(json.dumps(["ready"]), flush=True)
 lock_in, lock_out = threading.Lock(), threading.Lock()
 def worker():
@@ -26,7 +26,7 @@ def worker():
         if not line.strip():
             return
         i, mp, a, b, seed, out = json.loads(line)
-        r = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), capture_output=True, text=True, env=env, errors="replace")
+        r = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, errors="replace")
         text = r.stdout[-1500:] + ("" if "wins after" in r.stdout or "draw after" in r.stdout else "\nSTDERR " + r.stderr[-800:])
         with lock_out:
             print(json.dumps([i, text[-2000:]]), flush=True)
