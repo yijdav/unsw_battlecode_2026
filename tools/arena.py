@@ -1,4 +1,4 @@
-import argparse, base64, io, json, os, re, shlex, subprocess, sys, tarfile, threading, uuid
+import argparse, base64, io, json, math, os, re, shlex, subprocess, sys, tarfile, threading, uuid
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from pathlib import Path
@@ -116,6 +116,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("bot")
     ap.add_argument("opponents", nargs="+")
+    ap.add_argument("--baseline", help="also play this bot on the same fixtures and report paired flips")
     ap.add_argument("--maps", nargs="*", default=["maps/ladder", "maps"])
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("-j", type=int, default=8)
@@ -130,14 +131,16 @@ def main():
         maps += sorted(p.glob("*.map")) if p.is_dir() else [p]
     (ROOT / "replays" / "arena").mkdir(parents=True, exist_ok=True)
 
+    mine = [args.bot, *([args.baseline] if args.baseline else [])]
     jobs = []
-    for opp in args.opponents:
-        for mp in maps:
-            for seed in range(1, args.seeds + 1):
-                jobs.append((opp, mp, args.bot, opp, seed, "A"))
-                jobs.append((opp, mp, opp, args.bot, seed, "B"))
+    for me in mine:
+        for opp in args.opponents:
+            for mp in maps:
+                for seed in range(1, args.seeds + 1):
+                    jobs.append((me, opp, mp, me, opp, seed, "A"))
+                    jobs.append((me, opp, mp, opp, me, seed, "B"))
 
-    bots = list(dict.fromkeys([args.bot, *args.opponents]))
+    bots = list(dict.fromkeys([*mine, *args.opponents]))
     remotes = []
     for spec in filter(None, (args.remote or "").split(",")):
         r = Remote(spec.strip(), args.remote_j)
@@ -164,15 +167,15 @@ def main():
     lock = threading.Lock()
 
     def record(i, outcome):
-        opp, mp, a, b, seed, side = jobs[i]
+        me, opp, mp, a, b, seed, side = jobs[i]
         winner, rounds, how = outcome
         res = winner if winner in ("draw", "error") else ("win" if winner == side else "loss")
         with lock:
-            results[i] = (opp, f"{mp.parent.name}/{mp.stem}", side, res, rounds, how)
+            results[i] = (me, opp, f"{mp.parent.name}/{mp.stem}", side, res, rounds, how, seed)
 
     def run_remote(r):
-        spec = [[i, str(jobs[i][1].relative_to(ROOT)), jobs[i][2], jobs[i][3], jobs[i][4],
-                 str(replay_path(jobs[i][1], jobs[i][2], jobs[i][3], jobs[i][4]))] for i in sorted(remote_ids) if owner[i] is r]
+        spec = [[i, str(jobs[i][2].relative_to(ROOT)), jobs[i][3], jobs[i][4], jobs[i][5],
+                 str(replay_path(jobs[i][2], jobs[i][3], jobs[i][4], jobs[i][5]))] for i in sorted(remote_ids) if owner[i] is r]
         payload = json.dumps([spec, bots, r.j, args.sandbox])
         command = f"cd {r.ws} && python3 -"
         for mux in ([True, False] if r.mux else [False]):
@@ -209,7 +212,7 @@ def main():
         warm(b, args.sandbox)
 
     def run_local(i):
-        opp, mp, a, b, seed, side = jobs[i]
+        me, opp, mp, a, b, seed, side = jobs[i]
         record(i, play(mp, a, b, seed, args.sandbox))
 
     with ThreadPoolExecutor(max(args.j, 1)) as pool:
@@ -221,16 +224,42 @@ def main():
     losses = []
     for i in range(len(jobs)):
         if i not in results:
-            results[i] = (jobs[i][0], f"{jobs[i][1].parent.name}/{jobs[i][1].stem}", jobs[i][5], "error", -1, "no result")
-        opp, mp, side, res, rounds, how = results[i]
-        tally[opp][res] += 1
+            me, opp, mp, a, b, seed, side = jobs[i]
+            results[i] = (me, opp, f"{mp.parent.name}/{mp.stem}", side, "error", -1, "no result", seed)
+        me, opp, mp, side, res, rounds, how, seed = results[i]
+        tally[(me, opp)][res] += 1
         if res != "win":
             where = f" on {owner[i].host}" if owner[i] is not None else ""
-            losses.append(f"  {res:4s} vs {opp:10s} {mp:28s} as {side}  r{rounds} ({how}){where}")
-    for opp, t in tally.items():
+            who = f"{me} " if args.baseline else ""
+            losses.append(f"  {who}{res:4s} vs {opp:10s} {mp:28s} as {side}  r{rounds} ({how}){where}")
+    for (me, opp), t in tally.items():
         n = t["win"] + t["draw"] + t["loss"]
         err = f"  {t['error']} failed to run" if t["error"] else ""
-        print(f"{args.bot} vs {opp}: {t['win']}W {t['draw']}D {t['loss']}L  ({t['win'] / max(n, 1):.0%} wins of {n}){err}")
+        print(f"{me} vs {opp}: {t['win']}W {t['draw']}D {t['loss']}L  ({t['win'] / max(n, 1):.0%} wins of {n}){err}")
+    if args.baseline:
+        score = {"win": 1.0, "draw": 0.5, "loss": 0.0}
+        fixtures = defaultdict(dict)
+        for me, opp, mp, side, res, rounds, how, seed in results.values():
+            fixtures[(opp, mp, seed, side)][me] = res
+        for opp in args.opponents:
+            gained = lost = same = skipped = 0
+            for (o, mp, seed, side), r in fixtures.items():
+                if o != opp:
+                    continue
+                c, b = r.get(args.bot, "error"), r.get(args.baseline, "error")
+                if "error" in (c, b):
+                    skipped += 1
+                elif score[c] > score[b]:
+                    gained += 1
+                elif score[c] < score[b]:
+                    lost += 1
+                else:
+                    same += 1
+            n = gained + lost
+            k = min(gained, lost)
+            p = min(1.0, 2 * sum(math.comb(n, x) for x in range(k + 1)) / 2 ** n) if n else 1.0
+            print(f"paired vs {opp}: {args.bot} gained {gained}, lost {lost}, same {same}"
+                  f"{f', skipped {skipped}' if skipped else ''}  (sign test p={p:.3g})")
     for r in remotes:
         print(f"({sum(1 for w in owner.values() if w is r)} of {len(jobs)} games ran on {r.host})")
     print("\n".join(sorted(losses)))
