@@ -8,3 +8,4 @@ __pycache__/
 bot2/
 v_*/
 opp_*/
+tools/replay/libunpack.*
