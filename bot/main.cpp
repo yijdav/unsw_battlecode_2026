@@ -125,6 +125,15 @@ struct Knobs {
     double exit_calm = 0;
     int feed_reach = 7;
     int feed_min_units = 0;
+    int shield_len = 8;
+    int shield_tail = 2;
+    bool shield_all = true;
+    int shield_last = 500;
+    bool blind_tie = false;
+    bool blind_feed_exempt = false;
+    int calm_radius = 0;
+    bool calm_zero = false;
+    int crowd_reach = 0;
 } K;
 
 int W, H, N;
@@ -325,7 +334,11 @@ int bfs(int start, int length, int cap) {
             bool vp = false;
             int n = step(c, d, &vp);
             if (n < 0) continue;
-            if (dist[n] != INF) { ++back_edges; continue; }
+            if (dist[n] != INF) {
+                ++back_edges;
+                if (K.blind_tie && bpath[n] && dist[n] == dist[c] + 1 && !(bpath[c] | uint8_t(vp && seen_round[n] != round_num))) bpath[n] = 0;
+                continue;
+            }
             int t = dist[c] + 1;
             if (occupied(n)) {
                 int s = self_seg[n];
@@ -565,11 +578,13 @@ void turn(unswbc::Controller& ct) {
     if (K.feed_min_units > 0 && ct.get_unit_count() < K.feed_min_units) feed_blocked = true;
     if (feed_phase && !am_champion && champ_visible && !feed_blocked && hunt < 0 && !guard && round_num <= K.feed_last_round &&
         chebyshev(head, champ_head) <= 2) {
+        if (K.crowd_reach > 0) bfs(champ_head, 0, N);
         int near = 0;
-        for (int c : visible_cells) if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3) ++near;
+        for (int c : visible_cells)
+            if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3 && (K.crowd_reach <= 0 || dist[c] - 1 <= K.crowd_reach)) ++near;
         bool reachable = true;
         if (K.feed_reach > 0 && near < K.crowded_pearls) {
-            bfs(champ_head, 0, N);
+            if (K.crowd_reach <= 0) bfs(champ_head, 0, N);
             reachable = false;
             for (int s = 0; s < (int)history.size() && !reachable; s += 2) {
                 int const c = history[s];
@@ -629,7 +644,7 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
-    struct Target { int cell; double value; int not_before; };
+    struct Target { int cell; double value; int not_before; bool champ = false; };
     std::vector<Target> targets;
     auto pearl_value = [&](int c) -> double {
         if (K.reach_cap > 0 && (am_champion || L >= K.reach_pearl_len) && threat(c, true) <= 1) return 0;
@@ -667,8 +682,8 @@ void turn(unswbc::Controller& ct) {
         for (int d = 0; d < 4; ++d) targets.push_back({adj(sighting.cell, d), 2.8, 0});
     }
     if (feed_phase && !am_champion && champ_head >= 0 && !feed_blocked) {
-        for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0}); }
-        for (int d = 0; d < 4; ++d) { int n = adj(adj(champ_head, d), d); targets.push_back({n, 2.5, 0}); }
+        for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0, true}); }
+        for (int d = 0; d < 4; ++d) { int n = adj(adj(champ_head, d), d); targets.push_back({n, 2.5, 0, true}); }
     }
     if (!am_champion || targets.empty()) {
         for (int c = 0; c < N; ++c) {
@@ -832,7 +847,7 @@ void turn(unswbc::Controller& ct) {
             if (g.cell == t) dd = 1;
             int eta = std::max(dd, g.not_before);
             double v = g.value * 100.0 * decay[std::min(eta, 255)];
-            if (K.blind_route < 1 && bpath[g.cell]) v *= K.blind_route;
+            if (K.blind_route < 1 && bpath[g.cell] && !(K.blind_feed_exempt && g.champ)) v *= K.blind_route;
             tv = std::max(tv, v);
         }
         s += tv;
@@ -851,7 +866,13 @@ void turn(unswbc::Controller& ct) {
                     if (m >= 0 && m != t && occupied(m) && occ_head[m] && occ_id[m] != my_id) { ++contested; break; }
                 }
             }
-            if (exits <= 1) s -= K.exit_penalty * (contested > 0 ? 1 + contested : K.exit_calm);
+            if (exits <= 1) {
+                bool calm = contested == 0;
+                if (calm && K.calm_zero && exits == 0) calm = false;
+                if (calm && K.calm_radius > 0)
+                    for (auto const& e : enemies) if (manhattan(t, e.head) <= K.calm_radius) calm = false;
+                s -= K.exit_penalty * (calm ? K.exit_calm : 1 + contested);
+            }
         }
         if (K.spawn_block > 0 && spawn_at[t] > round_num && spawn_at[t] - round_num <= eff_len && pearl_seen[t] != round_num)
             s -= K.spawn_block;
@@ -938,6 +959,29 @@ void turn(unswbc::Controller& ct) {
             std::reverse(moves.begin(), moves.end());
             ct.make_moves(moves);
             ct.set_indicator_string("sprint");
+            goto sonar;
+        }
+    }
+    if (K.shield_len > 0 && K.reach_cap > 0 && L >= K.shield_len && best.valid && !best.attack && tail >= 0 && ct.can_split(L - 2)) {
+        int const bt = step(head, best.dir);
+        bool boxed = bt >= 0 && threat(bt, pearl_seen[bt] == round_num) <= 0;
+        if (boxed && K.shield_all) {
+            for (int d = 0; d < 4; ++d) {
+                int const n = step(head, d);
+                if (n >= 0 && !occupied(n) && threat(n, pearl_seen[n] == round_num) > 0) boxed = false;
+            }
+        }
+        if (boxed && round_num >= K.shield_last) {
+            bool late = false;
+            for (auto const& e : enemies)
+                if (e.len <= L && occ_id[e.head] > my_id && manhattan(head, e.head) <= K.reach_cap + 2) late = true;
+            if (!late) boxed = false;
+        }
+        if (boxed && threat(tail, true) >= K.shield_tail && tail_exit()) {
+            ct.do_split(L - 2);
+            note_split(L - 2);
+            ct.set_indicator_string("shield");
+            split_turn = true;
             goto sonar;
         }
     }
