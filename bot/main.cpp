@@ -134,6 +134,11 @@ struct Knobs {
     int calm_radius = 0;
     bool calm_zero = false;
     int crowd_reach = 0;
+    int portal_starve = 2;
+    int portal_big_n = 2048;
+    int split_reserve = 0;
+    bool shield_champ = false;
+    int split_tail_exits = 0;
 } K;
 
 int W, H, N;
@@ -608,9 +613,18 @@ void turn(unswbc::Controller& ct) {
         champ_lost = true;
         for (int d = 0; d < 4; ++d) if (dist[adj(champ_head, d)] < INF) champ_lost = false;
     }
+    bool starve = false;
+    if (K.portal_starve > 0 && open_end && !feed_phase && !am_champion) {
+        plain_region(head, N);
+        int hidden = 0;
+        for (int c : visible_cells)
+            if (region_mark[c] != region_stamp && !occupied(c) && (pearl_seen[c] == round_num || quick_seen[c] >= 3)) ++hidden;
+        starve = hidden >= K.portal_starve;
+    }
     bool const portal_ok = K.portal_explore > 0 && open_end && !am_champion && L <= K.portal_max_len && (!feed_phase || champ_lost) &&
                            (!K.portal_need_tail || tail >= 0) &&
-                           (K.portal_region <= 0 || feed_phase || plain_region(head, K.portal_region) <= K.portal_region);
+                           (K.portal_region <= 0 || feed_phase || starve || (K.portal_big_n > 0 && N >= K.portal_big_n) ||
+                            plain_region(head, K.portal_region) <= K.portal_region);
 
     auto threat = [&](int c, bool grown) { return threat_at[c] != stamp ? INF : grown ? threat_le[c] : threat_lt[c]; };
     if (K.reach_cap > 0) {
@@ -962,7 +976,9 @@ void turn(unswbc::Controller& ct) {
             goto sonar;
         }
     }
-    if (K.shield_len > 0 && K.reach_cap > 0 && L >= K.shield_len && best.valid && !best.attack && tail >= 0 && ct.can_split(L - 2)) {
+    if (K.shield_len > 0 && K.reach_cap > 0 && L >= K.shield_len && best.valid && !best.attack &&
+        (tail >= 0 || (K.shield_champ && am_champion && feed_phase && (int)history.size() == L)) && ct.can_split(L - 2)) {
+        int const shield_cell = tail >= 0 ? tail : history[L - 1];
         int const bt = step(head, best.dir);
         bool boxed = bt >= 0 && threat(bt, pearl_seen[bt] == round_num) <= 0;
         if (boxed && K.shield_all) {
@@ -977,7 +993,7 @@ void turn(unswbc::Controller& ct) {
                 if (e.len <= L && occ_id[e.head] > my_id && manhattan(head, e.head) <= K.reach_cap + 2) late = true;
             if (!late) boxed = false;
         }
-        if (boxed && threat(tail, true) >= K.shield_tail && tail_exit()) {
+        if (boxed && threat(shield_cell, true) >= K.shield_tail && (tail < 0 || tail_exit())) {
             ct.do_split(L - 2);
             note_split(L - 2);
             ct.set_indicator_string("shield");
@@ -1009,7 +1025,8 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
-    if (!feed_phase && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0) {
+    if (!feed_phase && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0 &&
+        (K.split_reserve <= 0 || units < unswbc::game->get_unit_limit() - K.split_reserve)) {
         auto has_exit = [&](int from, int avoid) {
             for (int d = 0; d < 4; ++d) {
                 int n = step(from, d);
@@ -1021,7 +1038,11 @@ void turn(unswbc::Controller& ct) {
         };
         int crowd = 0;
         for (int c : visible_cells) if (occupied(c) && !occ_enemy[c] && occ_id[c] != my_id) ++crowd;
-        bool threatened = crowd > K.split_crowd || !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap);
+        int tail_free = 0;
+        if (K.split_tail_exits > 0)
+            for (int d = 0; d < 4; ++d) { int n = step(tail, d); if (n >= 0 && !occupied(n)) ++tail_free; }
+        bool threatened = crowd > K.split_crowd || !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap) ||
+                          (K.split_tail_exits > 0 && tail_free < K.split_tail_exits);
         if (!threatened) {
             int shared = 0;
             for (int d = 0; d < 4; ++d) { int n = step(head, d); if (n >= 0 && !occupied(n)) ++shared; }
