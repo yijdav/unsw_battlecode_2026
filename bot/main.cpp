@@ -139,6 +139,11 @@ struct Knobs {
     int split_reserve = 0;
     bool shield_champ = false;
     int split_tail_exits = 0;
+    int map_prior = 2;
+    double pr_explore = 60;
+    double pr_blind_land = 10;
+    double pr_blind_route = 1;
+    double pr_land_friend = 300;
 } K;
 
 int W, H, N;
@@ -217,6 +222,45 @@ int step(int c, int d, bool* via_portal = nullptr) {
     int const p = north ? partner_n[key] : partner_w[key];
     if (p < 0) return -1;
     return (d == 0 || d == 3) ? adj(p, d) : p;
+}
+
+struct PriorMap { int w, h, bit; char const* edges; std::vector<std::array<int, 3>> ports; std::vector<int> founts; };
+std::vector<PriorMap> const PRIORS = {
+    {32, 16, 2, "1110101010101010111011101010101011101112111010101010111011101010010000000002000001020100000000010100010001000000000001202100000001000000111201001012000011100101010010120000111001001010000000000100000011100100000000001112010101000000000011100100000000000000010000001010000011100100101000010100111001001012000011100100000001000000000000001112010000020001010011100100000000001112010000000100000011100100101200001110010101001012000011120100101200000000010000202100010000000000010201011001000000000100010000000000000001000000101000001110010010100011100111120100101000001110010000000100000000020000010201000002001001010100010000020000012021000000010000001112010010100000111001000101101200001112010010100000000001000000111001000002000011100100010100000000111001000000000000000100000010100000111001001010000001011112010010100000111001000000010000000000000011100100000200000101111001000002000011120100000001000000111001001010000011100100010110100000111201001012000000000100002021000100000000000102010001000000000001000100000000000000",
+     {{0, 69, 0}, {0, 475, 0}, {1, 37, 0}, {1, 443, 0}, {2, 228, 1}, {2, 316, 1}, {3, 227, 1}, {3, 315, 1}, {4, 187, 0}, {4, 293, 0}, {5, 219, 0}, {5, 325, 0}, {6, 59, 1}, {6, 483, 1}, {7, 60, 1}, {7, 484, 1}, {8, 41, 0}, {8, 439, 0}, {9, 73, 0}, {9, 471, 0}, {10, 169, 0}, {10, 311, 0}, {11, 201, 0}, {11, 343, 0}, {12, 215, 0}, {12, 361, 0}, {13, 151, 0}, {13, 297, 0}, {14, 19, 0}, {14, 429, 0}, {15, 83, 0}, {15, 493, 0}, {16, 301, 0}, {16, 403, 0}, {17, 109, 0}, {17, 211, 0}, {18, 173, 0}, {18, 275, 0}, {19, 237, 0}, {19, 339, 0}},
+     {47, 111, 175, 239, 272, 336, 400, 464}},
+};
+
+bool prior_on = false, prior_checked = false;
+std::vector<uint8_t> prior_fount;
+
+void check_prior(std::vector<unswbc::Tile> const& tiles) {
+    prior_checked = true;
+    for (auto const& pm : PRIORS) {
+        if (!(K.map_prior & pm.bit) || pm.w != W || pm.h != H) continue;
+        bool ok = true;
+        for (int i = 0; i < VS * VS && ok; ++i) {
+            auto const& t = tiles[i];
+            int c = cell_of(t.get_position().x, t.get_position().y);
+            for (int d = 0; d < 4 && ok; ++d) {
+                auto const& e = t.get_edge(DIRS[d]);
+                int kind = e.get_edge_type() == unswbc::EdgeType::KELP ? 1 : e.is_portal() ? 2 : 0;
+                bool north;
+                int const key = edge_key(c, d, north);
+                if (pm.edges[2 * key + (north ? 0 : 1)] - '0' != kind) ok = false;
+            }
+        }
+        if (!ok) continue;
+        for (int c = 0; c < N; ++c) { edge_n[c] = uint8_t(pm.edges[2 * c] - '0'); edge_w[c] = uint8_t(pm.edges[2 * c + 1] - '0'); }
+        for (auto const& pt : pm.ports) {
+            bool const north = pt[2] != 0;
+            (north ? portal_n : portal_w)[pt[1]] = pt[0];
+            remember_portal(pt[0], pt[1], north);
+        }
+        for (int c : pm.founts) { prior_fount[c] = 1; quick_seen[c] = 3; }
+        prior_on = true;
+        return;
+    }
 }
 
 struct Report { int len, cell, round; };
@@ -379,6 +423,9 @@ void turn(unswbc::Controller& ct) {
     int const feed_start = (N >= 2048) ? K.feed_start_big : K.feed_start_small;
     bool const feed_phase = round_num >= feed_start;
     bool split_turn = false;
+    if (!prior_checked && K.map_prior) check_prior(tiles);
+    double const blind_land = prior_on && K.pr_blind_land >= 0 ? K.pr_blind_land : K.blind_land;
+    double const blind_route = prior_on && K.pr_blind_route >= 0 ? K.pr_blind_route : K.blind_route;
 
     std::unordered_map<int, int> seg_count;
     std::unordered_map<int, bool> partial;
@@ -408,7 +455,7 @@ void turn(unswbc::Controller& ct) {
         if (pt >= 0 && pt <= 1 && quick_round[c] != round_num) {
             quick_round[c] = round_num;
             if (quick_seen[c] < 255) ++quick_seen[c];
-        } else if (pt > 3 && quick_seen[c] > 0) {
+        } else if (pt > 3 && quick_seen[c] > 0 && !prior_fount[c]) {
             quick_seen[c] = 0;
         }
         if (auto const* p = t.get_dragon()) {
@@ -840,12 +887,13 @@ void turn(unswbc::Controller& ct) {
             else if (md == 2 && am_champion) s -= 20;
         }
         if (via_portal && seen_round[t] != round_num) {
-            s -= am_champion ? K.champ_blind_land : K.blind_land;
+            s -= am_champion ? K.champ_blind_land : blind_land;
             if (K.young_blind_land > 0 && (int)history.size() < L) s -= K.young_blind_land * double(L - (int)history.size()) / L;
-            if ((am_champion ? K.champ_blind_land : K.blind_land) > 0)
+            if ((am_champion ? K.champ_blind_land : blind_land) > 0)
                 for (auto const& [id, r] : reports)
                     if (id != my_id && r.round >= round_num - 1 && manhattan(r.cell, t) <= 1)
-                        s -= (feed_phase && id == champ) ? 800 : (am_champion ? 200 : 12);
+                        s -= (feed_phase && id == champ) ? 800 : (am_champion ? 200 : (prior_on && K.pr_land_friend >= 0 ? K.pr_land_friend : 12));
+            if (prior_on && K.pr_explore > 0 && seen_round[t] < 0 && !am_champion && (!feed_phase || champ_lost)) s += K.pr_explore;
         }
         if (am_champion && K.champ_portal_cell > 0) {
             for (int e = 0; e < 4; ++e) {
@@ -861,7 +909,7 @@ void turn(unswbc::Controller& ct) {
             if (g.cell == t) dd = 1;
             int eta = std::max(dd, g.not_before);
             double v = g.value * 100.0 * decay[std::min(eta, 255)];
-            if (K.blind_route < 1 && bpath[g.cell] && !(K.blind_feed_exempt && g.champ)) v *= K.blind_route;
+            if (blind_route < 1 && bpath[g.cell] && !(K.blind_feed_exempt && g.champ)) v *= blind_route;
             tv = std::max(tv, v);
         }
         s += tv;
@@ -1115,6 +1163,7 @@ int main() {
     partner_n.assign(N, -1); partner_w.assign(N, -1);
     decay[0] = 1; for (int k = 1; k < 256; ++k) decay[k] = k == 1 ? 1 : decay[k - 1] * 0.88;
     seen_round.assign(N, -1);
+    prior_fount.assign(N, 0);
     pearl_seen.assign(N, -1); spawn_at.assign(N, -1); quick_seen.assign(N, 0); quick_round.assign(N, -1);
     occ_stamp.assign(N, 0); occ_id.assign(N, -1); self_seg.assign(N, -1);
     occ_head.assign(N, 0); occ_enemy.assign(N, 0); occ_dir.assign(N, 0); dist.assign(N, INF); bpath.assign(N, 0); region_mark.assign(N, 0);
