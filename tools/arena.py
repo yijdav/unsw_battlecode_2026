@@ -10,7 +10,8 @@ SSH_OPTS = SSH_BASE + SSH_MUX
 
 RUNNER = r'''
 import json, os, resource, shutil, subprocess, sys, threading
-bots, j, sandbox, cache = json.loads(sys.stdin.readline())
+bots, j, sandbox, cache, *_opt = json.loads(sys.stdin.readline())
+lite = bool(_opt and _opt[0])
 _s, _h = resource.getrlimit(resource.RLIMIT_NOFILE)
 for _n in (65536, 32768, 16384, 10240, 4096):
     try:
@@ -33,8 +34,10 @@ def worker():
         if not line.strip():
             return
         i, mp, a, b, seed, out = json.loads(line)
-        r = subprocess.run(cmd([mp, a, b, "--seed", str(seed), "-o", out, "--no-logs"]), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, errors="replace")
+        r = subprocess.run(cmd([mp, a, b, "--seed", str(seed)] + (["--no-replay"] if lite else ["-o", out]) + ["--no-logs"]), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, errors="replace")
         text = r.stdout[-1500:] + ("" if "wins after" in r.stdout or "draw after" in r.stdout else "\nSTDERR " + r.stderr[-800:])
+        if lite:
+            text = next((ln for ln in text.splitlines() if "wins after" in ln or "draw after" in ln), text[-300:])
         with lock_out:
             print(json.dumps([i, text[-2000:]]), flush=True)
 threads = [threading.Thread(target=worker) for _ in range(j)]
@@ -81,6 +84,8 @@ def warm(bot, sandbox):
 
 class Remote:
     def __init__(self, spec, default_j):
+        self.lite = spec.startswith("lite:")
+        spec = spec[5:] if self.lite else spec
         self.wsl = spec.startswith("wsl:")
         spec = spec[4:] if self.wsl else spec
         self.j = default_j
@@ -96,7 +101,7 @@ class Remote:
         b64 = base64.b64encode((f"cd ~ && {command}" if self.wsl else command).encode()).decode()
         remote = f"wsl --exec /usr/local/bin/bcrun {b64}" if self.wsl else f'bash -lc "$(echo {b64} | base64 -d)"'
         login = ["-l", self.user] if self.user else []
-        opts = SSH_BASE + (SSH_MUX if (self.mux if mux is None else mux) else [])
+        opts = SSH_BASE + (SSH_MUX if (self.mux if mux is None else mux) else []) + (["-o", "Compression=yes"] if self.lite else [])
         return ["ssh", *opts, *login, self.host, remote]
 
 
@@ -126,7 +131,7 @@ def bot_key(bot):
     return f"{safe(bot)}-{h.hexdigest()[:12]}"
 
 
-def sync(host, ws, bots):
+def sync(host, ws, bots, maps=None):
     host.cache = {b: bot_key(b) for b in dict.fromkeys(bots)}
     keys = " ".join(host.cache.values())
     r = ssh(host, f"mkdir -p bc/cache && cd bc/cache && for k in {keys}; do [ -d $k ] && touch $k && echo $k; done; "
@@ -141,7 +146,10 @@ def sync(host, ws, bots):
                 continue
             for path in bot_files(b):
                 tar.add(path, arcname=f"cache/{k}/{path.relative_to(ROOT / b)}".rstrip("/."), recursive=False)
-        for path in [ROOT / "maps", *sorted((ROOT / "maps").rglob("*"))]:
+        wanted = [ROOT / "maps", *sorted((ROOT / "maps").rglob("*"))]
+        if host.lite and maps is not None:
+            wanted = sorted({*maps, ROOT / "maps" / "arena.map"} & set(wanted))
+        for path in wanted:
             tar.add(path, arcname=f"runs/{ws.split('/')[-1]}/{path.relative_to(ROOT)}", recursive=False)
     links = " && ".join(f"ln -sfn ~/bc/cache/{k} {ws}/{b}" for b, k in host.cache.items())
     run_dir = ws.split("/")[-1]
@@ -150,6 +158,9 @@ def sync(host, ws, bots):
 
 
 def fetch(host, ws):
+    if host.lite:
+        ssh(host, f"rm -rf {ws}")
+        return
     r = ssh(host, f"cd {ws} && tar -c replays && cd && rm -rf {ws}")
     if r.returncode == 0 and r.stdout:
         with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tar:
@@ -191,7 +202,7 @@ def main():
         if r.j <= 0:
             continue
         r.ws = f"bc/runs/{uuid.uuid4().hex[:12]}"
-        if sync(r, r.ws, bots):
+        if sync(r, r.ws, bots, maps):
             remotes.append(r)
         else:
             print(f"remote {r.name} unreachable, skipping it", file=sys.stderr)
@@ -215,7 +226,7 @@ def main():
         return json.dumps([i, str(mp.relative_to(ROOT)), a, b, seed, str(replay_path(mp, a, b, seed))]) + "\n"
 
     def run_remote(r):
-        header = json.dumps([bots, r.j, args.sandbox, r.cache])
+        header = json.dumps([bots, r.j, args.sandbox, r.cache, r.lite])
         command = f"cd {r.ws} && python3 -c {shlex.quote(BOOT)}"
         for mux in ([True, False] if r.mux else [False]):
             got = 0
