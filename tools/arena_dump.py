@@ -9,13 +9,20 @@ SSH_MUX = ["-o", "ControlMaster=auto", "-o", f"ControlPath={Path.home()}/.ssh/cm
 SSH_OPTS = SSH_BASE + SSH_MUX
 
 RUNNER = r'''
-import json, os, subprocess, sys, threading
+import json, os, resource, shutil, subprocess, sys, threading
 bots, j, sandbox, cache = json.loads(sys.stdin.readline())
+_s, _h = resource.getrlimit(resource.RLIMIT_NOFILE)
+for _n in (65536, 32768, 16384, 10240, 4096):
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (_n if _h == resource.RLIM_INFINITY else min(_n, _h), _h))
+        break
+    except (ValueError, OSError):
+        pass
 env = dict(os.environ, PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""), UNSWBC_NO_UPDATE="1")
 def cmd(args):
     return ["nice", "-n", "10", "unswbc", "run", *args] + (["--sandbox"] if sandbox else [])
 for b in bots:
-    lock = ["flock", os.path.expanduser(f"~/bc/cache/{cache[b]}.lock")] if b in cache else []
+    lock = ["flock", os.path.expanduser(f"~/bc/cache/{cache[b]}.lock")] if b in cache and shutil.which("flock") else []
     subprocess.run(lock + cmd(["maps/arena.map", b, b, "--no-replay", "--seed", "1"]), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
 print(json.dumps(["ready"]), flush=True)
 lock_in, lock_out = threading.Lock(), threading.Lock()
@@ -135,10 +142,10 @@ def sync(host, ws, bots):
             for path in bot_files(b):
                 tar.add(path, arcname=f"cache/{k}/{path.relative_to(ROOT / b)}".rstrip("/."), recursive=False)
         for path in [ROOT / "maps", *sorted((ROOT / "maps").rglob("*"))]:
-            tar.add(path, arcname=f"{ws.split('/')[-1]}/{path.relative_to(ROOT)}", recursive=False)
+            tar.add(path, arcname=f"runs/{ws.split('/')[-1]}/{path.relative_to(ROOT)}", recursive=False)
     links = " && ".join(f"ln -sfn ~/bc/cache/{k} {ws}/{b}" for b, k in host.cache.items())
     run_dir = ws.split("/")[-1]
-    r = ssh(host, f"mkdir -p bc/runs/{run_dir} && tar -x -C bc -f - --transform 's,^{run_dir}/,runs/{run_dir}/,' && mkdir -p {ws}/replays/arena && {links}", input=buf.getvalue())
+    r = ssh(host, f"mkdir -p bc/runs/{run_dir} && tar -x -C bc -f - && mkdir -p {ws}/replays/arena && {links}", input=buf.getvalue())
     return r.returncode == 0
 
 
