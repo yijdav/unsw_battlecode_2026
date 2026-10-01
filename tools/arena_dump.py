@@ -194,6 +194,7 @@ def main():
     ap.add_argument("--extra", nargs="*", default=[])
     ap.add_argument("--extra-opps", nargs="*")
     ap.add_argument("--resume", action="store_true", help="keep the games already in <dump>.partial and play only the rest")
+    ap.add_argument("--deadline", type=float, default=0, help="unix time after which no new local game is started")
     args = ap.parse_args()
 
     maps = []
@@ -353,6 +354,8 @@ def main():
 
     def local_worker():
         while True:
+            if args.deadline and time.time() > args.deadline:
+                return
             try:
                 i = pending.get(timeout=0.5)
             except queue.Empty:
@@ -372,7 +375,7 @@ def main():
         t.join()
     for t in local:
         t.join()
-    while not pending.empty():
+    while not pending.empty() and not (args.deadline and time.time() > args.deadline):
         i = pending.get()
         me, opp, mp, a, b, seed, side = jobs[i]
         record(i, play(mp, a, b, seed, args.sandbox), None)

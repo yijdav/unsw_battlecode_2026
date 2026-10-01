@@ -30,16 +30,20 @@ def sign_p(g, l):
     return min(1.0, 2 * sum(math.comb(n, x) for x in range(min(g, l) + 1)) / 2 ** n)
 
 
-def run_games(bot, opps, fset, out, j, remote, resume):
+def run_games(bot, opps, fset, out, j, remote, resume, deadline=0):
     maps, first = SETS[fset]
     for suffix in ("", ".partial", ".cpu") if not resume else ("",):
         Path(str(out) + suffix).unlink(missing_ok=True)
     cmd = [sys.executable, str(ROOT / "tools" / "arena_dump.py"), bot, *opps, "--maps", *maps, "--first-seed", str(first),
-           "--sandbox", "-j", str(j), "--dump", str(out)] + (["--resume"] if resume else [])
+           "--sandbox", "-j", str(j), "--dump", str(out)] + (["--resume"] if resume else []) + (["--deadline", str(deadline)] if deadline else [])
     if remote:
         cmd += ["--remote", remote]
     subprocess.run(cmd, cwd=ROOT, check=True)
     rows = json.load(open(out))
+    missing = sum(1 for r in rows if r[5] == "error")
+    if missing:
+        print(f"incomplete: {missing} of {len(rows)} games not played or failed; rerun with --resume", file=sys.stderr)
+        sys.exit(3)
     cpu = {}
     if Path(str(out) + ".cpu").exists():
         for line in open(str(out) + ".cpu"):
@@ -77,7 +81,7 @@ def metrics_for(rows, j, keep):
 
 def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
     out = runs / f"{tag}_{fset}.json"
-    rows, cpu = run_games(bot, opps, fset, out, j, remote, resume)
+    rows, cpu = run_games(bot, opps, fset, out, j, remote, resume, float(os.environ.get("GATE_DEADLINE", "0") or 0))
     mets = metrics_for(rows, dj, keep)
     table = []
     for row, m in zip(rows, mets):
