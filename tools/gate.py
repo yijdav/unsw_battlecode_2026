@@ -1,4 +1,4 @@
-import argparse, json, math, os, subprocess, sys
+import argparse, json, math, os, subprocess, sys, threading, time
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -81,6 +81,11 @@ def metrics_for(rows, j, keep):
 
 def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
     out = runs / f"{tag}_{fset}.json"
+    games = runs / f"{tag}_{fset}_games.jsonl"
+    if resume and games.exists():
+        done = [json.loads(line) for line in open(games)]
+        if done and all(r["res"] != "error" and "error" not in r for r in done):
+            return done
     rows, cpu = run_games(bot, opps, fset, out, j, remote, resume, float(os.environ.get("GATE_DEADLINE", "0") or 0))
     mets = metrics_for(rows, dj, keep)
     table = []
@@ -129,19 +134,28 @@ def verify(cand, base, cname, bname, path, j):
         if b is None or "error" in (r["res"], b["res"]) or r["res"] == b["res"] or k in done:
             continue
         todo.append((k, r, b))
-    jobs = [(k, who, bot) for k, r, b in todo for who, bot in (("cand", cname), ("base", bname)) for _ in range(2)]
-    with ThreadPoolExecutor(max(1, j)) as ex:
-        got = list(ex.map(lambda x: replay_result(x[2], x[0][0], x[0][1], x[0][3], x[0][2]), jobs))
-    by = {}
-    for (k, who, _), res in zip(jobs, got):
-        by.setdefault((k, who), []).append(res)
-    with open(path, "a") as f:
-        for k, r, b in todo:
-            c3 = [r["res"], *by[(k, "cand")]]
-            b3 = [b["res"], *by[(k, "base")]]
-            v = {"key": list(k), "cand": max(set(c3), key=c3.count), "base": max(set(b3), key=b3.count), "cand_runs": c3, "base_runs": b3}
+    deadline = float(os.environ.get("GATE_DEADLINE", "0") or 0)
+    lock = threading.Lock()
+
+    def one(item):
+        k, r, b = item
+        if deadline and time.time() > deadline:
+            return False
+        got = {who: [replay_result(bot, k[0], k[1], k[3], k[2]) for _ in range(2)] for who, bot in (("cand", cname), ("base", bname))}
+        c3 = [r["res"], *(x for x in got["cand"] if x != "error")]
+        b3 = [b["res"], *(x for x in got["base"] if x != "error")]
+        v = {"key": list(k), "cand": max(set(c3), key=c3.count), "base": max(set(b3), key=b3.count), "cand_runs": c3, "base_runs": b3}
+        with lock:
             done[k] = v
-            f.write(json.dumps(v) + "\n")
+            with open(path, "a") as f:
+                f.write(json.dumps(v) + "\n")
+        return True
+
+    with ThreadPoolExecutor(max(1, j)) as ex:
+        finished = list(ex.map(one, todo))
+    if not all(finished):
+        print(f"incomplete: verified {sum(finished)} of {len(todo)} flipped fixtures before the deadline; rerun with --resume", file=sys.stderr)
+        sys.exit(3)
     return done
 
 
