@@ -5,7 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tools" / "replay"))
-from arena_dump import bot_key, replay_path
+from concurrent.futures import ThreadPoolExecutor
+from arena_dump import bot_key, parse, replay_path
 from decode import decode
 
 OPPS = ["v_base", "sb_bang", "sb_python_io", "sb_heartbreaker", "ai_like", "opp_nicked_arch4"]
@@ -102,6 +103,44 @@ def base_rows(fset, opps, runs, j, remote, keep, base, resume=False, dj=6):
     return rows
 
 
+def replay_result(bot, opp, mp, side, seed):
+    a, b = (bot, opp) if side == "A" else (opp, bot)
+    out = subprocess.run(["unswbc", "run", str(ROOT / "maps" / (mp + ".map")), a, b, "--seed", str(seed), "--sandbox", "--no-replay"],
+                         cwd=ROOT, capture_output=True, text=True, errors="replace").stdout
+    winner = parse(out)[0]
+    return winner if winner in ("draw", "error") else ("win" if winner == side else "loss")
+
+
+def verify(cand, base, cname, bname, path, j):
+    done = {}
+    if path.exists():
+        for line in open(path):
+            v = json.loads(line)
+            done[tuple(v["key"])] = v
+    bmap = {(r["opp"], r["map"], r["seed"], r["side"]): r for r in base}
+    todo = []
+    for r in cand:
+        k = (r["opp"], r["map"], r["seed"], r["side"])
+        b = bmap.get(k)
+        if b is None or "error" in (r["res"], b["res"]) or r["res"] == b["res"] or k in done:
+            continue
+        todo.append((k, r, b))
+    jobs = [(k, who, bot) for k, r, b in todo for who, bot in (("cand", cname), ("base", bname)) for _ in range(2)]
+    with ThreadPoolExecutor(max(1, j)) as ex:
+        got = list(ex.map(lambda x: replay_result(x[2], x[0][0], x[0][1], x[0][3], x[0][2]), jobs))
+    by = {}
+    for (k, who, _), res in zip(jobs, got):
+        by.setdefault((k, who), []).append(res)
+    with open(path, "a") as f:
+        for k, r, b in todo:
+            c3 = [r["res"], *by[(k, "cand")]]
+            b3 = [b["res"], *by[(k, "base")]]
+            v = {"key": list(k), "cand": max(set(c3), key=c3.count), "base": max(set(b3), key=b3.count), "cand_runs": c3, "base_runs": b3}
+            done[k] = v
+            f.write(json.dumps(v) + "\n")
+    return done
+
+
 def mean(xs):
     xs = [x for x in xs if x is not None]
     return sum(xs) / len(xs) if xs else None
@@ -111,15 +150,24 @@ def fmt(x):
     return "-" if x is None else (f"{x:.1f}" if isinstance(x, float) else str(x))
 
 
-def report(cand, base, cname, fset):
+def report(cand, base, cname, fset, checked=None):
+    checked = checked or {}
     bmap = {(r["opp"], r["map"], r["seed"], r["side"]): r for r in base}
     pairs = []
+    fixed = 0
     for r in cand:
-        b = bmap.get((r["opp"], r["map"], r["seed"], r["side"]))
+        k = (r["opp"], r["map"], r["seed"], r["side"])
+        b = bmap.get(k)
         if b is None or "error" in (r["res"], b["res"]):
             continue
+        if k in checked:
+            v = checked[k]
+            if v["cand"] != r["res"] or v["base"] != b["res"]:
+                fixed += 1
+            r, b = dict(r, res=v["cand"]), dict(b, res=v["base"])
         pairs.append((r, b))
-    lines = [f"# Gate: {cname} vs v_base ({fset} set, {len(pairs)} paired fixtures)", ""]
+    lines = [f"# Gate: {cname} vs v_base ({fset} set, {len(pairs)} paired fixtures)", "",
+             f"Flipped fixtures replayed twice per side: {len(checked)}; results corrected by the majority of three: {fixed}.", ""]
 
     def flips(sel):
         g = sum(1 for r, b in sel if SCORE[r["res"]] > SCORE[b["res"]])
@@ -199,6 +247,7 @@ def main():
     ap.add_argument("--report-only", action="store_true")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--decode-j", type=int, default=6)
+    ap.add_argument("--no-verify", action="store_true")
     args = ap.parse_args()
     runs = ROOT / args.runs
     runs.mkdir(parents=True, exist_ok=True)
@@ -209,7 +258,8 @@ def main():
     else:
         base = base_rows(args.set, args.opps, runs, args.j, args.remote, args.keep_replays, args.base, args.resume, args.decode_j)
         cand = collect(args.candidate, args.set, args.opps, runs, tag, args.j, args.remote, args.keep_replays, args.resume, args.decode_j)
-    text, ok = report(cand, base, args.candidate, args.set)
+    checked = {} if args.no_verify else verify(cand, base, args.candidate, args.base, runs / f"{tag}_{args.set}_verify.jsonl", args.j)
+    text, ok = report(cand, base, args.candidate, args.set, checked)
     (runs / f"{tag}_{args.set}_report.md").write_text(text, encoding="utf-8")
     print(text)
     print("GATE", "PASS" if ok else "FAIL", "(item 4 still to judge)")
