@@ -67,12 +67,23 @@ def parse(text):
     return "error", -1, "error"
 
 
+def points(v):
+    return float(v[:-1]) * 1e6 if v.endswith("M") else float(v.replace(",", ""))
+
+
+def cpu_of(text):
+    got = {}
+    for team, p99, mx in re.findall(r"team (A|B) points per turn: p50 \S+\s+p99 (\S+)\s+mean \S+\s+max (\S+)", text):
+        got[team] = (points(mx), points(p99))
+    return got
+
+
 def play(map_path, a, b, seed, sandbox):
     out = ROOT / replay_path(map_path, a, b, seed)
     cmd = ["unswbc", "run", str(map_path), a, b, "--seed", str(seed), "-o", str(out), "--no-logs"]
     if sandbox:
         cmd.append("--sandbox")
-    return parse(subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True).stdout)
+    return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, errors="replace").stdout
 
 
 def warm(bot, sandbox):
@@ -228,7 +239,9 @@ def main():
     for i in range(len(jobs)):
         pending.put(i)
 
-    def record(i, outcome, where):
+    def record(i, text, where):
+        outcome = parse(text)
+        cpu = cpu_of(text)
         me, opp, mp, a, b, seed, side = jobs[i]
         winner, rounds, how = outcome
         res = winner if winner in ("draw", "error") else ("win" if winner == side else "loss")
@@ -238,6 +251,10 @@ def main():
             if args.dump:
                 with open(args.dump + ".partial", "a") as f:
                     f.write(json.dumps([i, *results[i], where.host if where is not None else "local"]) + "\n")
+                if cpu:
+                    with open(args.dump + ".cpu", "a") as f:
+                        f.write(json.dumps([i, *(cpu.get(t, (None, None))[0] for t in "AB"),
+                                            *(cpu.get(t, (None, None))[1] for t in "AB")]) + "\n")
 
     def job_line(i):
         me, opp, mp, a, b, seed, side = jobs[i]
@@ -294,11 +311,10 @@ def main():
                 if i not in assigned:
                     continue
                 assigned.discard(i)
-                outcome = parse(text)
-                if outcome[0] == "error" and not r.reported:
+                if parse(text)[0] == "error" and not r.reported:
                     r.reported = True
                     print(f"{r.host}: a game failed: {text.strip()[-600:]}", file=sys.stderr)
-                record(i, outcome, r)
+                record(i, text, r)
                 got += 1
                 feed()
             err = proc.stderr.read()
