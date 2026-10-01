@@ -179,7 +179,7 @@ struct Knobs {
     int book_region_cap = 3;
     double book_w = 10;
     int book_min_len = 3;
-    bool lookahead = false;
+    int lookahead = 0;
     int lookahead_depth = 2;
     int lookahead_budget = 200000;
     bool champ_lock = false;
@@ -1153,7 +1153,7 @@ void turn(unswbc::Controller& ct) {
         la_nodes = 0;
         la_abort = false;
         for (auto const& e : enemies) {
-            if (la_abort || !(manhattan(head, e.head) <= e.len || (am_champion && feed_phase))) continue;
+            if (la_abort || !((K.lookahead == 1 && manhattan(head, e.head) <= e.len) || (am_champion && feed_phase))) continue;
             la_on = true;
             ++la_id;
             int const fid = occ_id[e.head];
