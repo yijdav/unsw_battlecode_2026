@@ -210,11 +210,31 @@ class Board:
                     q.append(n)
         return {(x, y) for x in range(self.W) for y in range(self.H)} - seen
 
+    def tube_cells(self):
+        cells = [(x, y) for x in range(self.W) for y in range(self.H)]
+        nbr = {}
+        for c in cells:
+            nbr[c] = [n for n, via in (self.step(c, d) for d in range(4)) if n is not None and not via]
+        out = set()
+        for c in cells:
+            if len(nbr[c]) != 1:
+                continue
+            tube, prev, cur = [c], None, c
+            while True:
+                nxt = [n for n in nbr[cur] if n != prev]
+                if len(nxt) != 1 or len(nbr[nxt[0]]) != 2:
+                    break
+                prev, cur = cur, nxt[0]
+                tube.append(cur)
+            if len(tube) >= 2 and any(0 < self.gaps.get(t, (0, 0))[1] <= 2 for t in tube):
+                out.update(tube)
+        return out
+
 
 def team_stats():
     return {'alive_r100': None, 'pearls_r100': 0, 'behind_portal_pearls_r100': 0, 'first_cross': None,
             'crossings_r100': 0, 'own_coll_deaths': 0, 'own_coll_portal': 0, 'champ_feed_deaths': 0,
-            'small_head_deaths_by_enemy': 0, 'deaths': {r: 0 for r in REASONS}, 'longest_feed_start': None,
+            'small_head_deaths_by_enemy': 0, 'tube_deaths': 0, 'deaths': {r: 0 for r in REASONS}, 'longest_feed_start': None,
             'cpu_peak': 0, 'cpu_p99': 0, 'final_longest': None, 'final_count': None}
 
 
@@ -225,6 +245,7 @@ def decode(path):
     W, H = board.W, board.H
     feed_start = 261 if W * H >= 2048 else 383
     behind = board.portal_only_cells()
+    tubes = board.tube_cells()
     team = {}
     body = {}
     for did, t, b in board.dragons:
@@ -303,6 +324,8 @@ def decode(path):
             t = team[did]
             b = body.get(did, ())
             st[t]['deaths'][REASONS[reason] if reason < len(REASONS) else str(reason)] += 1
+            if b and b[0] in tubes:
+                st[t]['tube_deaths'] += 1
             killer = None
             via = False
             if reason in (2, 3):
