@@ -19,16 +19,16 @@ constexpr int PEARL_MEMORY = 40;
 constexpr int INF = 1 << 20;
 
 struct Knobs {
-    int feed_start_small = 320;
-    int feed_start_big = 290;
+    int feed_start_small = 383;
+    int feed_start_big = 261;
     int split_at = 4;
-    int feed_last_round = 494;
-    int crowded_pearls = 3;
+    int feed_last_round = 496;
+    int crowded_pearls = 5;
     bool escape_split = true;
-    double explore_value = 0.3;
-    double fountain_value = 0.7;
+    double explore_value = 0.1882;
+    double fountain_value = 0.6071;
     bool cycle_test = false;
-    double exit_penalty = 15;
+    double exit_penalty = 8.519;
     int split_crowd = 99;
     bool remote_hunt = false;
     int sighting_len = 8;
@@ -39,8 +39,8 @@ struct Knobs {
     bool sight_refresh = true;
     bool sight_partial = true;
     bool feed_guard = true;
-    int feed_margin = 1;
-    int feed_min_age = 3;
+    int feed_margin = 0;
+    int feed_min_age = 2;
     double feed_self_frac = 0;
     bool trap_model = true;
     bool trap_model_feed = true;
@@ -54,28 +54,28 @@ struct Knobs {
     int split_shout = 3;
     bool split_need_tail = true;
     bool tombstone = true;
-    double portal_explore = 45;
-    double portal_entry = 0.45;
+    double portal_explore = 24.3;
+    double portal_entry = 0.1873;
     bool portal_feed = true;
     int portal_max_len = 99;
     int portal_region = 300;
     bool portal_share = true;
     int portal_gossip = 2;
     bool portal_need_tail = true;
-    double blind_land = 10;
+    double blind_land = 49.94;
     double champ_blind_land = 300;
     double champ_portal_cell = 100;
     int spawn_lead = 1;
-    double spawn_block = 30;
-    int reach_cap = 3;
+    double spawn_block = 53.83;
+    int reach_cap = 4;
     bool reach_clip = true;
     double reach_champ = 5000;
-    double reach_champ_edge = 150;
-    double reach_champ_far = 0;
+    double reach_champ_edge = 105.6;
+    double reach_champ_far = 32.02;
     int reach_long_len = 5;
-    double reach_long = 60;
+    double reach_long = 34.84;
     double reach_long_edge = 30;
-    double reach_adj = 400;
+    double reach_adj = 286.3;
     double reach_adj_len = 20;
     int reach_adj_units = 999;
     int reach_pearl_len = 8;
@@ -83,16 +83,16 @@ struct Knobs {
     double reach_corner_long = 30;
     bool sprint_ram = true;
     int sprint_margin = 1;
-    int sprint_max_len = 5;
+    int sprint_max_len = 4;
     int sprint_steps = 3;
-    int guard_radius = 4;
+    int guard_radius = 5;
     bool guard_chase = false;
     int sprint_min_units = 1;
     bool pocket_delay = true;
     bool delay_in_feed = true;
     bool pocket_harvest = true;
-    int harvest_pearls = 3;
-    double harvest_cost = 20;
+    int harvest_pearls = 2;
+    double harvest_cost = 20.71;
     int harvest_enemy_dist = 0;
     bool harvest_depth_check = true;
     bool harvest_tube = true;
@@ -100,11 +100,11 @@ struct Knobs {
     bool ram_gate = true;
     int ram_min_units = 2;
     int ram_long_units = 2;
-    int eq_min_units = 8;
-    int eq_free_gap = 16;
+    int eq_min_units = 9;
+    int eq_free_gap = 12;
     int eq_local = 1;
     int eq_window = 0;
-    double eq_avoid = 6;
+    double eq_avoid = 9.691;
     bool eq_feed = true;
     bool ram_trap = true;
     bool no_reverse = true;
@@ -121,6 +121,55 @@ struct Knobs {
     bool guard_fresh = true;
     bool ram_escape_full = true;
     int horizon_slack = 0;
+    double blind_route = 0.3;
+    double exit_calm = 0;
+    int feed_reach = 7;
+    int feed_min_units = 0;
+    int shield_len = 8;
+    int shield_tail = 2;
+    bool shield_all = true;
+    int shield_last = 500;
+    bool blind_tie = false;
+    bool blind_feed_exempt = false;
+    int calm_radius = 0;
+    bool calm_zero = false;
+    int crowd_reach = 0;
+    int portal_starve = 2;
+    int portal_big_n = 2048;
+    int split_reserve = 0;
+    bool shield_champ = false;
+    int split_tail_exits = 2;
+    int map_prior = 130;
+    double pr_explore = 60;
+    double pr_blind_land = 10;
+    double pr_blind_route = 1;
+    double pr_land_friend = 300;
+    int open_maps = 512;
+    int open_rounds = 30;
+    double open_portal = 0;
+    double open_blind = -1;
+    double open_entry = 0.6;
+    int open_min_len = 2;
+    bool open_closed_only = false;
+    int open_max_ids = 1;
+    int open_from = 6;
+    int eq_until = 0;
+    int eq_min_early = 4;
+    int eq_local_early = 1;
+    int eq_maps = 0;
+    int ste_until = 1000;
+    int ste_maps = 1024;
+    int detect_maps = 15360;
+    int sm_until = 0;
+    int sm_early = 0;
+    int sm_maps = 0;
+    int pr_fount_mask = -1;
+    int ctr_until = 30;
+    double ctr_bonus = 15;
+    int ctr_maps = 2048;
+    int cup_until = 0;
+    double cup_bonus = 0;
+    int cup_maps = 0;
 } K;
 
 int W, H, N;
@@ -199,6 +248,79 @@ int step(int c, int d, bool* via_portal = nullptr) {
     int const p = north ? partner_n[key] : partner_w[key];
     if (p < 0) return -1;
     return (d == 0 || d == 3) ? adj(p, d) : p;
+}
+
+struct PriorMap { int w, h, bit; char const* edges; std::vector<std::array<int, 3>> ports; std::vector<int> founts; };
+std::vector<PriorMap> const PRIORS = {
+    {32, 16, 2, "1110101010101010111011101010101011101112111010101010111011101010010000000002000001020100000000010100010001000000000001202100000001000000111201001012000011100101010010120000111001001010000000000100000011100100000000001112010101000000000011100100000000000000010000001010000011100100101000010100111001001012000011100100000001000000000000001112010000020001010011100100000000001112010000000100000011100100101200001110010101001012000011120100101200000000010000202100010000000000010201011001000000000100010000000000000001000000101000001110010010100011100111120100101000001110010000000100000000020000010201000002001001010100010000020000012021000000010000001112010010100000111001000101101200001112010010100000000001000000111001000002000011100100010100000000111001000000000000000100000010100000111001001010000001011112010010100000111001000000010000000000000011100100000200000101111001000002000011120100000001000000111001001010000011100100010110100000111201001012000000000100002021000100000000000102010001000000000001000100000000000000",
+     {{0, 69, 0}, {0, 475, 0}, {1, 37, 0}, {1, 443, 0}, {2, 228, 1}, {2, 316, 1}, {3, 227, 1}, {3, 315, 1}, {4, 187, 0}, {4, 293, 0}, {5, 219, 0}, {5, 325, 0}, {6, 59, 1}, {6, 483, 1}, {7, 60, 1}, {7, 484, 1}, {8, 41, 0}, {8, 439, 0}, {9, 73, 0}, {9, 471, 0}, {10, 169, 0}, {10, 311, 0}, {11, 201, 0}, {11, 343, 0}, {12, 215, 0}, {12, 361, 0}, {13, 151, 0}, {13, 297, 0}, {14, 19, 0}, {14, 429, 0}, {15, 83, 0}, {15, 493, 0}, {16, 301, 0}, {16, 403, 0}, {17, 109, 0}, {17, 211, 0}, {18, 173, 0}, {18, 275, 0}, {19, 237, 0}, {19, 339, 0}},
+     {47, 111, 175, 239, 272, 336, 400, 464}},
+    {60, 40, 128, "101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011100100000000000000000000000000000000000000000000000000000000000000000011100100000000000000000000000000000000000000000001000100000000000000000000000000000000000000000000000000000000000000000001000100000000000000000000000000000011100100000010100000000000000000000000000000001110101001000000000000000000000000000010100000000011100100000000000000000001000100000000000000000000000000000000000000110000000010010000000000000000000000000000000000000001000100000000000000000010100000000000000000000000000000000000000000010000000000010000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000000010000000000010000000000000000000000000000000000000000000000000000000000000000000011100100000000111010100100000000000000010000000000010000000000000011101010010000000011100100000000000000000000000000000001000101000011000011011001000000000000100100000011000000000000001100110100100100000101000100000000000000000000000000000010100010011100000010000001000000111010011010101000111010010000000100100000001001110010100000000000000000100102001110100100000000100000000000001100200011001101100100000011001101100120001001000000000010000000000011101001000211001001110000111101000000111010101010120010011100001010000100000001101000001001110010121010101010010000001111010010011100000010000000100001000011000000000000111001100000000000110000000010010000000010001110010000000000100100000110000000100000001110010000001000000200000010011110000010010011101010000000000000101010100100110000101001110000000002001000000000111001100000101010100000000000000000100000001101100100000000111001001110010000000011001101000010000000000000000010101010000010000000000001000011101010010000110100001000110000002000010001000100012000000010011000000011010000111010100100000100000000001110010010011100001101100110001010101010000000110100101000001010000011010000101010101000100011001101001001110000111001000100010000100000001000002100001110010010011110001001000000000000001100101001110000111001002001001000000010000000010001001010000000110100000000110000000100010002100000110110010000000000110011010010000200010001000010010000000011010000101000000000000011001010101010000000001010000000110100100011000011100100100110000011010000101000000000101010101000100100000000000200001000000000000000000000020000000010001010101000000001000100001010101000100000000000020000000000000000001000000002000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000000000011101001000000000011101001000000002000000000000000000000000000002000000000001110100100000000001110100100000000000000001100001100000000000010010010010000000000000000001110101001000000000000000000110000110000000000001001001001000000000000110000111101000002000011110100100100000000000000110002000210010000000000000011000011110100000200001111010010010000000000010000100001000000000001100000000100000000111001010000000000011110010000000001000010000100000000000110000000010000000000010000111000000000000010100100000100000011000010000000010000100000100100000001000011100000000000001010010000010000000000010011001110101010101010011001000100000001000000000000010000000000000100000001001100111010101010101001100100010000000000100110100000000000000000101000110000001100000001000000010000000100001001000010011010000000000000000010100011000000000000001001001111010000111101001110000000000100000010010000000000110000000001000000101001001111010000111101001100000000000000001100001010000000101000001001000000000110100100000000000000000011100001000000001100001010000000101000001001000000000011100100000010010000110000000011100100001001000000000011100100000000001100000011100100000010010000110000000011100100001100001001000000101010000000001100001001000010010000101000001010000000110000001100001001000000101010000000001100001001000100111010010000000000000000111010010001000000111000000000000000001010010000000100111010010000000000000000111010010001000000010000101010101010101010000000010000000011000000000000000000000000100100000000010000101010101010101010000000010000000000000000000000000000000000000000000000001100000000000000000000000000001001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000001001000000000000000000000000001100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010100100000000000000000011100000000000000000000000000000000000000000000000",
+     {{0, 1511, 0}, {0, 1529, 0}, {1, 1531, 0}, {1, 1549, 0}, {2, 850, 0}, {2, 1180, 0}, {3, 890, 0}, {3, 1160, 0}, {4, 681, 1}, {4, 1126, 1}, {5, 698, 1}, {5, 1093, 1}, {6, 985, 1}, {6, 1402, 1}, {7, 994, 1}, {7, 1417, 1}, {8, 762, 0}, {8, 1275, 0}, {9, 738, 0}, {9, 1305, 0}, {10, 718, 0}, {10, 1261, 0}, {11, 662, 0}, {11, 1319, 0}},
+     {}},
+    {25, 25, 512, "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001110101010101010101010010000000000000000000000001100000000000000000000001001000000000000001110010001000000000020000000000000010011100100001100001000010000000000000000000000000110000010010001000000000100000000000000000000000001000000000100010000000001000000000000000000000000010000000001000100000000010000000000000000000000000100000000010001000000001001000000000000000000001100000000000100100100000000010000000000000000000001000000001100000010010000000100000000000000000000010000001100000000001001000001000000000000000000000100001100000000000000100000100100000000000000001100001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000001000000000000000000000000000000000000001001000011000000000000000000000000000000000000000000100111000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     {{0, 162, 1}, {0, 562, 1}},
+     {}},
+    {32, 16, 1024, "1110101010101010101010101010111110111110101010101010101010101010010000000000000000000000000001010001010000000000000000000000000001000000000000000000000000000101000101000011101001000000000000000100000000000000111010010000010100010100000100000100000000000000010000000020000001000001000000000000000000012000010000000000000001000000000000000120000100000000000000000010101000002000000000000100000000000000101010000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000111010010000000000000001000000002000001110100100000000000000000001200001000000000000000100000000000000012000010000010100010100000100000100200000000000010000000000000001000001000001010001010000101010000000000000000001000000000000001010100000000101000101000000000000000000000000000100000000000000000000000000010100010100000000000000000000000000",
+     {{0, 169, 1}, {0, 186, 1}, {1, 357, 1}, {1, 374, 1}, {2, 393, 1}, {2, 410, 1}, {3, 133, 1}, {3, 150, 1}},
+     {14, 17, 46, 49, 78, 81, 430, 433, 462, 465, 494, 497}},
+    {32, 16, 2048, "1110101010011110011110011110011110011110011110011110011110101010010000000001010001010001010001010001010001010001010001010000000001000000000101000101000101000101000101000101000101000101000000000100000000010100010100010100000000000000010100010100010100000000010000000001010001010001010000000000000001010001010001010000000001000000000101000101000101000101000101000101000101000101000000000100000000010100010100010100010100010100010100010100010100000000010000000000000000000000000001010001010000000000000000000000000001000000000000000000000000000101000101000000000000000000000000000100000000000000000000000000010100010100000000000000000000000000010000000001010001010001010001010001010001010001010001010000000001000000000101000101000101000000000000000101000101000101000000000100000000010100010100010100000000000000010100010100010100000000010000000001010001010001010001010001010001010001010001010000000001000000000101000101000101000101000101000101000101000101000000000100000000010100010100010100010100010100010100010100010100000000",
+     {},
+     {5, 8, 11, 15, 16, 20, 23, 26, 238, 241, 270, 273, 485, 488, 495, 496, 503, 506}},
+    {25, 35, 4096, "0000000000000000000000000000000000000000000000000000111001001010101010100000110111120111010010101001000100010000000000000000000110000010000100000000010001000102000000000000001101000000000011010000000100101010000000000000111000101010101010001001000001000000000000000000000100001110101010010000010000000001000000000000001100001100000000001001001001000000010000000000000001000001010000000100010000100100000100000000000011000011000100000001001001000001000001000000000011000000010000000000000000010000010000010000000000010000000100000100010000110000000100000100000000000100000010010010100000110000000001000001000000000010010000001001000000110000000000010000010000000000000100001110000000000100000000110000000100000000000010010001000000000010101001110000000001000000000000001010000000000000000000100000000100010000000000000000000000000000000000000000000001000100000000000000000000000000000000000000000000010001000000000000000000000000000000000000000000000100010000000000000000000000000000000000000000000001000000001101000000000000000011100100000000000000010000001100101010010000000000010010010000000000000100001100000000000100000011100000000100000000000001000001000000001100000000100100000010010000000000010000010000001100001110010010010000000100000000000100000100001100000000000000000100000001000000000001000001000001000001000000010001000011000000000000010000010000100100010000000111000011000000000000000100001001000001000000000000010000010000000000000001000000100100100100000000110000110000000000000000000001000001000010101010100000000100000000000000000000010000100111101010101001111000000000000012111001000100000010010000000000110000000000000000000100010001000000000111010211010100000000000000000001000100101010000010001010001000001010101010100000101000",
+     {{0, 41, 0}, {0, 796, 0}, {1, 79, 0}, {1, 834, 0}},
+     {38, 40, 41, 43, 63, 64, 65, 66, 67, 68, 88, 89, 90, 91, 92, 93, 781, 782, 783, 784, 785, 786, 806, 807, 808, 809, 810, 811, 831, 833, 834, 836}},
+    {32, 32, 8192, "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011101010100100001010101010101010101010101010101010101010000000000100000000010000000000000000000000000000000000000000000000000000010020000001000010101010101010101010101010101010101010100000000001000000000100000000000000000000000000000000000000000000000000000100000000010000000000000000000000000000000000000000000000000000101010101000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011101010111010101110101001000000000000000000000000000000000000000120000001200000012000000100000000000000000000000000000000000000010000000100000001000000010000000000000000000000000000000000000001002000010020000100200001000000000000000000000000000000000000001110101011101010111010100100000000000000000000000000000000000000012000000120000001200000010000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000100200001002000010020000100000000000000000000000000000000000000111010101110101011101010010000000000000000000000000000000000000001200000012000000120000001000000000000000000000000000000000000000100000001000000010000000100000000000000000000000000000000000000010020000100200001002000010000000000000000000000000000000000000010101010101010101010101000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000011101010100100000000000000000000000000000000000000000000000000000100000000010000000000000000000000000000000000000000000000000000010000000001000000101010101010101010101010101010101010101000000001002000000100000000000000000000000000000000000000000000000000000100000000010000001010101010101010101010101010101010101010000000101010101000000000000000000000000000000000000000000000000000000000000000000000",
+     {{0, 132, 1}, {0, 280, 1}, {1, 775, 1}, {1, 923, 1}, {2, 428, 1}, {2, 499, 1}, {3, 564, 1}, {3, 619, 1}, {4, 367, 1}, {4, 684, 1}, {5, 432, 1}, {5, 495, 1}, {6, 560, 1}, {6, 623, 1}, {7, 371, 1}, {7, 688, 1}, {8, 436, 1}, {8, 491, 1}, {9, 556, 1}, {9, 627, 1}, {10, 262, 1}, {10, 363, 1}, {11, 692, 1}, {11, 793, 1}},
+     {}},
+};
+
+bool prior_on = false, prior_checked = false;
+int map_bit = 0;
+std::vector<uint8_t> prior_fount;
+
+PriorMap const* map_pm = nullptr;
+
+void apply_prior(PriorMap const& pm) {
+    map_bit = pm.bit;
+    map_pm = &pm;
+    if (!(K.map_prior & pm.bit)) return;
+    for (int c = 0; c < N; ++c) { edge_n[c] = uint8_t(pm.edges[2 * c] - '0'); edge_w[c] = uint8_t(pm.edges[2 * c + 1] - '0'); }
+    for (auto const& pt : pm.ports) {
+        bool const north = pt[2] != 0;
+        (north ? portal_n : portal_w)[pt[1]] = pt[0];
+        remember_portal(pt[0], pt[1], north);
+    }
+    if (K.pr_fount_mask & pm.bit)
+        for (int c : pm.founts) { prior_fount[c] = 1; quick_seen[c] = 3; }
+    prior_on = true;
+}
+
+void check_prior(std::vector<unswbc::Tile> const& tiles) {
+    prior_checked = true;
+    int hits = 0;
+    PriorMap const* hit = nullptr;
+    for (auto const& pm : PRIORS) {
+        if (!((K.map_prior | K.open_maps | K.detect_maps) & pm.bit) || pm.w != W || pm.h != H) continue;
+        bool ok = true;
+        for (int i = 0; i < VS * VS && ok; ++i) {
+            auto const& t = tiles[i];
+            int c = cell_of(t.get_position().x, t.get_position().y);
+            for (int d = 0; d < 4 && ok; ++d) {
+                auto const& e = t.get_edge(DIRS[d]);
+                int kind = e.get_edge_type() == unswbc::EdgeType::KELP ? 1 : e.is_portal() ? 2 : 0;
+                bool north;
+                int const key = edge_key(c, d, north);
+                if (pm.edges[2 * key + (north ? 0 : 1)] - '0' != kind) ok = false;
+            }
+        }
+        if (!ok) continue;
+        if (!K.detect_maps) { apply_prior(pm); return; }
+        ++hits;
+        if (!hit) hit = &pm;
+    }
+    if (hits > 1) { prior_checked = false; return; }
+    if (hit) apply_prior(*hit);
 }
 
 struct Report { int len, cell, round; };
@@ -280,6 +402,7 @@ struct Plan {
 };
 
 std::vector<int> dist;
+std::vector<uint8_t> bpath;
 double decay[256];
 
 std::vector<int> region_mark;
@@ -305,10 +428,11 @@ int plain_region(int start, int cap) {
 int bfs_depth = 0;
 bool bfs_cycle = false;
 bool bfs_terrain = false;
+uint8_t bfs_blind0 = 0;
 int bfs(int start, int length, int cap) {
     std::fill(dist.begin(), dist.end(), INF);
     static std::vector<int> queue; queue.clear();
-    dist[start] = 1; queue.push_back(start);
+    dist[start] = 1; bpath[start] = bfs_blind0; queue.push_back(start);
     int count = 0, back_edges = 0;
     bfs_depth = 1;
     for (size_t qi = 0; qi < queue.size(); ++qi) {
@@ -316,9 +440,14 @@ int bfs(int start, int length, int cap) {
         bfs_depth = std::max(bfs_depth, dist[c]);
         if (count >= cap) { bfs_depth = INF; break; }
         for (int d = 0; d < 4; ++d) {
-            int n = step(c, d);
+            bool vp = false;
+            int n = step(c, d, &vp);
             if (n < 0) continue;
-            if (dist[n] != INF) { ++back_edges; continue; }
+            if (dist[n] != INF) {
+                ++back_edges;
+                if (K.blind_tie && bpath[n] && dist[n] == dist[c] + 1 && !(bpath[c] | uint8_t(vp && seen_round[n] != round_num))) bpath[n] = 0;
+                continue;
+            }
             int t = dist[c] + 1;
             if (occupied(n)) {
                 int s = self_seg[n];
@@ -327,7 +456,7 @@ int bfs(int start, int length, int cap) {
                 if (s < 0 && bfs_terrain && occ_id[n] != my_id) ok = true;
                 if (!ok) continue;
             }
-            dist[n] = t; queue.push_back(n);
+            dist[n] = t; bpath[n] = bpath[c] | uint8_t(vp && seen_round[n] != round_num); queue.push_back(n);
         }
     }
     bfs_cycle = bfs_depth == INF || back_edges > count - 1;
@@ -354,6 +483,9 @@ void turn(unswbc::Controller& ct) {
     int const feed_start = (N >= 2048) ? K.feed_start_big : K.feed_start_small;
     bool const feed_phase = round_num >= feed_start;
     bool split_turn = false;
+    if (!prior_checked && (K.map_prior || K.open_maps || K.detect_maps)) check_prior(tiles);
+    double const blind_land = prior_on && K.pr_blind_land >= 0 ? K.pr_blind_land : K.blind_land;
+    double const blind_route = prior_on && K.pr_blind_route >= 0 ? K.pr_blind_route : K.blind_route;
 
     std::unordered_map<int, int> seg_count;
     std::unordered_map<int, bool> partial;
@@ -383,7 +515,7 @@ void turn(unswbc::Controller& ct) {
         if (pt >= 0 && pt <= 1 && quick_round[c] != round_num) {
             quick_round[c] = round_num;
             if (quick_seen[c] < 255) ++quick_seen[c];
-        } else if (pt > 3 && quick_seen[c] > 0) {
+        } else if (pt > 3 && quick_seen[c] > 0 && !prior_fount[c]) {
             quick_seen[c] = 0;
         }
         if (auto const* p = t.get_dragon()) {
@@ -555,11 +687,25 @@ void turn(unswbc::Controller& ct) {
         if (turns_alive <= K.feed_min_age && vis < L + K.feed_margin) feed_blocked = true;
         if (K.feed_self_frac > 0 && L >= 6 && L > K.feed_self_frac * clen) feed_blocked = true;
     }
+    if (K.feed_min_units > 0 && ct.get_unit_count() < K.feed_min_units) feed_blocked = true;
     if (feed_phase && !am_champion && champ_visible && !feed_blocked && hunt < 0 && !guard && round_num <= K.feed_last_round &&
         chebyshev(head, champ_head) <= 2) {
+        if (K.crowd_reach > 0) bfs(champ_head, 0, N);
         int near = 0;
-        for (int c : visible_cells) if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3) ++near;
-        if (near < K.crowded_pearls) {
+        for (int c : visible_cells)
+            if (pearl_seen[c] == round_num && chebyshev(c, champ_head) <= 3 && (K.crowd_reach <= 0 || dist[c] - 1 <= K.crowd_reach)) ++near;
+        bool reachable = true;
+        if (K.feed_reach > 0 && near < K.crowded_pearls) {
+            if (K.crowd_reach <= 0) bfs(champ_head, 0, N);
+            reachable = false;
+            for (int s = 0; s < (int)history.size() && !reachable; s += 2) {
+                int const c = history[s];
+                if (occupied(c) && occ_id[c] == my_id && self_seg[c] == s && dist[c] - 1 <= K.feed_reach) reachable = true;
+            }
+            for (int c : visible_cells)
+                if (!reachable && occupied(c) && occ_id[c] == my_id && self_seg[c] >= 0 && self_seg[c] % 2 == 0 && dist[c] - 1 <= K.feed_reach) reachable = true;
+        }
+        if (near < K.crowded_pearls && reachable) {
             ct.set_indicator_string("feed");
             return;
         }
@@ -574,9 +720,25 @@ void turn(unswbc::Controller& ct) {
         champ_lost = true;
         for (int d = 0; d < 4; ++d) if (dist[adj(champ_head, d)] < INF) champ_lost = false;
     }
-    bool const portal_ok = K.portal_explore > 0 && open_end && !am_champion && L <= K.portal_max_len && (!feed_phase || champ_lost) &&
-                           (!K.portal_need_tail || tail >= 0) &&
-                           (K.portal_region <= 0 || feed_phase || plain_region(head, K.portal_region) <= K.portal_region);
+    bool starve = false;
+    if (K.portal_starve > 0 && open_end && !feed_phase && !am_champion) {
+        plain_region(head, N);
+        int hidden = 0;
+        for (int c : visible_cells)
+            if (region_mark[c] != region_stamp && !occupied(c) && (pearl_seen[c] == round_num || quick_seen[c] >= 3)) ++hidden;
+        starve = hidden >= K.portal_starve;
+    }
+    bool const portal_base = K.portal_explore > 0 && open_end && !am_champion && L <= K.portal_max_len && (!feed_phase || champ_lost) &&
+                             (!K.portal_need_tail || tail >= 0);
+    auto gate_std = [&]() {
+        return K.portal_region <= 0 || feed_phase || starve || (K.portal_big_n > 0 && N >= K.portal_big_n) ||
+               plain_region(head, K.portal_region) <= K.portal_region;
+    };
+    bool opening = round_num < K.open_rounds && round_num >= K.open_from && (map_bit & K.open_maps) &&
+                   (int)portals.size() <= K.open_max_ids;
+    bool gate = portal_base && gate_std();
+    if (opening && K.open_closed_only && (portal_base ? gate : gate_std())) opening = false;
+    bool const portal_ok = portal_base && (gate || opening);
 
     auto threat = [&](int c, bool grown) { return threat_at[c] != stamp ? INF : grown ? threat_le[c] : threat_lt[c]; };
     if (K.reach_cap > 0) {
@@ -610,7 +772,7 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
-    struct Target { int cell; double value; int not_before; };
+    struct Target { int cell; double value; int not_before; bool champ = false; };
     std::vector<Target> targets;
     auto pearl_value = [&](int c) -> double {
         if (K.reach_cap > 0 && (am_champion || L >= K.reach_pearl_len) && threat(c, true) <= 1) return 0;
@@ -648,14 +810,24 @@ void turn(unswbc::Controller& ct) {
         for (int d = 0; d < 4; ++d) targets.push_back({adj(sighting.cell, d), 2.8, 0});
     }
     if (feed_phase && !am_champion && champ_head >= 0 && !feed_blocked) {
-        for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0}); }
-        for (int d = 0; d < 4; ++d) { int n = adj(adj(champ_head, d), d); targets.push_back({n, 2.5, 0}); }
+        for (int d = 0; d < 4; ++d) { int n = adj(champ_head, d); targets.push_back({n, 2.5, 0, true}); }
+        for (int d = 0; d < 4; ++d) { int n = adj(adj(champ_head, d), d); targets.push_back({n, 2.5, 0, true}); }
     }
     if (!am_champion || targets.empty()) {
         for (int c = 0; c < N; ++c) {
             if (seen_round[c] < 0) targets.push_back({c, K.explore_value, 0});
             else if (seen_round[c] < round_num - 80) targets.push_back({c, 0.5 * K.explore_value, 0});
         }
+    }
+    if (opening && K.open_entry > 0 && !am_champion && L >= K.open_min_len && (!K.portal_need_tail || tail >= 0)) {
+        for (auto const& [id, ends] : portals)
+            for (auto const& e : ends) {
+                int const far = (e.north ? partner_n : partner_w)[e.cell];
+                if (far >= 0 && seen_round[far] >= 0 && seen_round[e.north ? adj(far, 0) : adj(far, 3)] >= 0) continue;
+                int const beside = e.north ? adj(e.cell, 0) : adj(e.cell, 3);
+                if (!occupied(e.cell)) targets.push_back({e.cell, K.open_entry, 0});
+                if (!occupied(beside)) targets.push_back({beside, K.open_entry, 0});
+            }
     }
     if (portal_ok && K.portal_entry > 0) {
         for (auto const& [id, ends] : portals)
@@ -689,6 +861,7 @@ void turn(unswbc::Controller& ct) {
         if (cell == hunt || cell == guard_head || elen > L) return units >= K.ram_long_units;
         if (elen < L) return false;
         if (units >= unswbc::game->get_unit_limit() - K.eq_free_gap || (K.eq_feed && feed_phase)) return true;
+        if (round_num < K.eq_until && (!K.eq_maps || (map_bit & K.eq_maps))) return units >= K.eq_min_early && edge >= K.eq_local_early;
         return units >= K.eq_min_units && edge >= K.eq_local;
     };
     Plan best;
@@ -731,7 +904,9 @@ void turn(unswbc::Controller& ct) {
             continue;
         }
         int const eff_len = L + (pearl_seen[t] == round_num ? 1 : 0);
+        bfs_blind0 = uint8_t(via_portal && seen_round[t] != round_num);
         int area = bfs(t, eff_len, cap);
+        bfs_blind0 = 0;
         areas[d] = area;
         double s = 0;
         bool danger = false;
@@ -789,13 +964,16 @@ void turn(unswbc::Controller& ct) {
             if (md <= 1) s -= is_champ ? 800 : (am_champion ? 200 : 12);
             else if (md == 2 && am_champion) s -= 20;
         }
-        if (via_portal && seen_round[t] != round_num) {
-            s -= am_champion ? K.champ_blind_land : K.blind_land;
+        if (via_portal && seen_round[t] != round_num && opening && K.open_blind >= 0 && !am_champion) {
+            s -= K.open_blind;
+        } else if (via_portal && seen_round[t] != round_num) {
+            s -= am_champion ? K.champ_blind_land : blind_land;
             if (K.young_blind_land > 0 && (int)history.size() < L) s -= K.young_blind_land * double(L - (int)history.size()) / L;
-            if ((am_champion ? K.champ_blind_land : K.blind_land) > 0)
+            if ((am_champion ? K.champ_blind_land : blind_land) > 0)
                 for (auto const& [id, r] : reports)
                     if (id != my_id && r.round >= round_num - 1 && manhattan(r.cell, t) <= 1)
-                        s -= (feed_phase && id == champ) ? 800 : (am_champion ? 200 : 12);
+                        s -= (feed_phase && id == champ) ? 800 : (am_champion ? 200 : (prior_on && K.pr_land_friend >= 0 ? K.pr_land_friend : 12));
+            if (prior_on && K.pr_explore > 0 && seen_round[t] < 0 && !am_champion && (!feed_phase || champ_lost)) s += K.pr_explore;
         }
         if (am_champion && K.champ_portal_cell > 0) {
             for (int e = 0; e < 4; ++e) {
@@ -811,6 +989,7 @@ void turn(unswbc::Controller& ct) {
             if (g.cell == t) dd = 1;
             int eta = std::max(dd, g.not_before);
             double v = g.value * 100.0 * decay[std::min(eta, 255)];
+            if (blind_route < 1 && bpath[g.cell] && !(K.blind_feed_exempt && g.champ)) v *= blind_route;
             tv = std::max(tv, v);
         }
         s += tv;
@@ -829,10 +1008,25 @@ void turn(unswbc::Controller& ct) {
                     if (m >= 0 && m != t && occupied(m) && occ_head[m] && occ_id[m] != my_id) { ++contested; break; }
                 }
             }
-            if (exits <= 1) s -= K.exit_penalty * (1 + contested);
+            if (exits <= 1) {
+                bool calm = contested == 0;
+                if (calm && K.calm_zero && exits == 0) calm = false;
+                if (calm && K.calm_radius > 0)
+                    for (auto const& e : enemies) if (manhattan(t, e.head) <= K.calm_radius) calm = false;
+                s -= K.exit_penalty * (calm ? K.exit_calm : 1 + contested);
+            }
         }
         if (K.spawn_block > 0 && spawn_at[t] > round_num && spawn_at[t] - round_num <= eff_len && pearl_seen[t] != round_num)
             s -= K.spawn_block;
+        if (round_num < K.ctr_until && K.ctr_bonus != 0 && !am_champion && (!K.ctr_maps || (map_bit & K.ctr_maps))) {
+            int const mid = cell_of(W / 2, H / 2);
+            s += K.ctr_bonus * double(manhattan(head, mid) - manhattan(t, mid));
+        }
+        if (round_num < K.cup_until && K.cup_bonus != 0 && !am_champion && map_pm && !map_pm->founts.empty() && (map_bit & K.cup_maps)) {
+            int d0 = INF, d1 = INF;
+            for (int f : map_pm->founts) { d0 = std::min(d0, manhattan(head, f)); d1 = std::min(d1, manhattan(t, f)); }
+            s += K.cup_bonus * double(d0 - d1);
+        }
         if (d == facing) s += 1.0;
         s += double(rng.next() % 100) / 1000.0;
         p.valid = true; p.score = s; p.trap = trap; p.harvest = harvest; p.danger = danger;
@@ -840,7 +1034,7 @@ void turn(unswbc::Controller& ct) {
     }
     for (int d : portal_dirs) {
         Plan p; p.dir = d; p.valid = true;
-        p.score = K.portal_explore + (d == facing ? 1.0 : 0.0) + double(rng.next() % 100) / 1000.0;
+        p.score = (opening ? std::max(K.portal_explore, K.open_portal) : K.portal_explore) + (d == facing ? 1.0 : 0.0) + double(rng.next() % 100) / 1000.0;
         if (p.score > best.score) best = p;
     }
     auto tail_exit = [&]() {
@@ -887,6 +1081,7 @@ void turn(unswbc::Controller& ct) {
     if (K.sprint_ram && !am_champion && !best.attack && L >= 3 && (L <= K.sprint_max_len || guard) && !enemies.empty() &&
         ct.get_unit_count() > K.sprint_min_units) {
         int const maxn = std::min(K.sprint_steps, L - 1);
+        int const margin = round_num < K.sm_until && (!K.sm_maps || (map_bit & K.sm_maps)) ? K.sm_early : K.sprint_margin;
         std::vector<std::array<int, 4>> nodes{{head, -1, -1, 0}};
         int best_node = -1, best_last = -1, best_elen = 0, best_steps = 0;
         for (size_t qi = 0; qi < nodes.size(); ++qi) {
@@ -898,7 +1093,7 @@ void turn(unswbc::Controller& ct) {
                 if (occupied(n)) {
                     if (k < 1 || !occ_head[n] || !occ_enemy[n]) continue;
                     int const elen = seg_count[occ_id[n]];
-                    int const worth = (guard && n == guard_head) ? INF : (elen >= L + K.sprint_margin && L <= K.sprint_max_len) ? elen : 0;
+                    int const worth = (guard && n == guard_head) ? INF : (elen >= L + margin && L <= K.sprint_max_len) ? elen : 0;
                     if (worth > 0 && (worth > best_elen || (worth == best_elen && k + 1 < best_steps))) {
                         best_elen = worth; best_steps = k + 1; best_node = int(qi); best_last = d;
                     }
@@ -916,6 +1111,31 @@ void turn(unswbc::Controller& ct) {
             std::reverse(moves.begin(), moves.end());
             ct.make_moves(moves);
             ct.set_indicator_string("sprint");
+            goto sonar;
+        }
+    }
+    if (K.shield_len > 0 && K.reach_cap > 0 && L >= K.shield_len && best.valid && !best.attack &&
+        (tail >= 0 || (K.shield_champ && am_champion && feed_phase && (int)history.size() == L)) && ct.can_split(L - 2)) {
+        int const shield_cell = tail >= 0 ? tail : history[L - 1];
+        int const bt = step(head, best.dir);
+        bool boxed = bt >= 0 && threat(bt, pearl_seen[bt] == round_num) <= 0;
+        if (boxed && K.shield_all) {
+            for (int d = 0; d < 4; ++d) {
+                int const n = step(head, d);
+                if (n >= 0 && !occupied(n) && threat(n, pearl_seen[n] == round_num) > 0) boxed = false;
+            }
+        }
+        if (boxed && round_num >= K.shield_last) {
+            bool late = false;
+            for (auto const& e : enemies)
+                if (e.len <= L && occ_id[e.head] > my_id && manhattan(head, e.head) <= K.reach_cap + 2) late = true;
+            if (!late) boxed = false;
+        }
+        if (boxed && threat(shield_cell, true) >= K.shield_tail && (tail < 0 || tail_exit())) {
+            ct.do_split(L - 2);
+            note_split(L - 2);
+            ct.set_indicator_string("shield");
+            split_turn = true;
             goto sonar;
         }
     }
@@ -943,7 +1163,8 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
-    if (!feed_phase && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0) {
+    if (!feed_phase && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0 &&
+        (K.split_reserve <= 0 || units < unswbc::game->get_unit_limit() - K.split_reserve)) {
         auto has_exit = [&](int from, int avoid) {
             for (int d = 0; d < 4; ++d) {
                 int n = step(from, d);
@@ -955,7 +1176,12 @@ void turn(unswbc::Controller& ct) {
         };
         int crowd = 0;
         for (int c : visible_cells) if (occupied(c) && !occ_enemy[c] && occ_id[c] != my_id) ++crowd;
-        bool threatened = crowd > K.split_crowd || !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap);
+        int tail_free = 0;
+        bool const ste = K.split_tail_exits > 0 && round_num < K.ste_until && (!K.ste_maps || (map_bit & K.ste_maps));
+        if (ste)
+            for (int d = 0; d < 4; ++d) { int n = step(tail, d); if (n >= 0 && !occupied(n)) ++tail_free; }
+        bool threatened = crowd > K.split_crowd || !has_exit(tail, -1) || !has_exit(head, -1) || (best.valid && best.trap) ||
+                          (ste && tail_free < K.split_tail_exits);
         if (!threatened) {
             int shared = 0;
             for (int d = 0; d < 4; ++d) { int n = step(head, d); if (n >= 0 && !occupied(n)) ++shared; }
@@ -1028,9 +1254,10 @@ int main() {
     partner_n.assign(N, -1); partner_w.assign(N, -1);
     decay[0] = 1; for (int k = 1; k < 256; ++k) decay[k] = k == 1 ? 1 : decay[k - 1] * 0.88;
     seen_round.assign(N, -1);
+    prior_fount.assign(N, 0);
     pearl_seen.assign(N, -1); spawn_at.assign(N, -1); quick_seen.assign(N, 0); quick_round.assign(N, -1);
     occ_stamp.assign(N, 0); occ_id.assign(N, -1); self_seg.assign(N, -1);
-    occ_head.assign(N, 0); occ_enemy.assign(N, 0); occ_dir.assign(N, 0); dist.assign(N, INF); region_mark.assign(N, 0);
+    occ_head.assign(N, 0); occ_enemy.assign(N, 0); occ_dir.assign(N, 0); dist.assign(N, INF); bpath.assign(N, 0); region_mark.assign(N, 0);
     ff_stamp.assign(N, 0); ff_free.assign(N, 0); rim_stamp.assign(N, 0); ptl_stamp.assign(N, 0);
     threat_at.assign(N, 0); threat_lt.assign(N, INF); threat_le.assign(N, INF); reach_mark.assign(N, 0); reach_dist.assign(N, 0);
 
