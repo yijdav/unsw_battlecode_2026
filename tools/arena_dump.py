@@ -245,6 +245,8 @@ def main():
             except ValueError:
                 continue
             i = row[0]
+            if row[5] == "error":
+                continue
             if 0 <= i < len(jobs) and tuple(row[1:3]) == jobs[i][:2] and row[8] == jobs[i][5] and row[4] == jobs[i][6]:
                 results[i] = tuple(row[1:9])
                 done.add(i)
