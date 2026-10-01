@@ -181,7 +181,7 @@ struct Knobs {
     int book_min_len = 3;
     int lookahead = 0;
     int lookahead_depth = 2;
-    int lookahead_budget = 200000;
+    int lookahead_budget = 20000;
     bool champ_lock = false;
     int champ_lock_round = 200;
     double champ_pearl_mult = 2;
