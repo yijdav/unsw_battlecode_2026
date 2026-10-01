@@ -136,15 +136,34 @@ def verify(cand, base, cname, bname, path, j):
         todo.append((k, r, b))
     deadline = float(os.environ.get("GATE_DEADLINE", "0") or 0)
     lock = threading.Lock()
+    recheck_path = path.parent / "base_main_recheck.jsonl"
+    recheck = {}
+    if recheck_path.exists():
+        for line in open(recheck_path):
+            v = json.loads(line)
+            recheck[tuple(v["key"])] = v["res"]
+
+    def majority(bot, k, first, known=None):
+        runs_ = [first]
+        second = known if known is not None else replay_result(bot, k[0], k[1], k[3], k[2])
+        runs_.append(second)
+        if second != first:
+            runs_ += [replay_result(bot, k[0], k[1], k[3], k[2]) for _ in range(2)]
+        valid = [x for x in runs_ if x != "error"] or [first]
+        return sorted(set(valid), key=lambda x: (-valid.count(x), x != first, x))[0], runs_, second
 
     def one(item):
         k, r, b = item
         if deadline and time.time() > deadline:
             return False
-        got = {who: [replay_result(bot, k[0], k[1], k[3], k[2]) for _ in range(2)] for who, bot in (("cand", cname), ("base", bname))}
-        c3 = [r["res"], *(x for x in got["cand"] if x != "error")]
-        b3 = [b["res"], *(x for x in got["base"] if x != "error")]
-        v = {"key": list(k), "cand": max(set(c3), key=c3.count), "base": max(set(b3), key=b3.count), "cand_runs": c3, "base_runs": b3}
+        cand_res, c3, _ = majority(cname, k, r["res"])
+        base_res, b3, second = majority(bname, k, b["res"], recheck.get(k))
+        v = {"key": list(k), "cand": cand_res, "base": base_res, "cand_runs": c3, "base_runs": b3}
+        if k not in recheck and second != "error":
+            with lock:
+                recheck[k] = second
+                with open(recheck_path, "a") as f:
+                    f.write(json.dumps({"key": list(k), "res": second}) + "\n")
         with lock:
             done[k] = v
             with open(path, "a") as f:
