@@ -30,8 +30,9 @@ def sign_p(g, l):
     return min(1.0, 2 * sum(math.comb(n, x) for x in range(min(g, l) + 1)) / 2 ** n)
 
 
-def run_games(bot, opps, fset, out, j, remote, resume, deadline=0):
-    maps, first = SETS[fset]
+def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
+    first = SETS[fset][1]
+    maps = maps or SETS[fset][0]
     for suffix in ("", ".partial", ".cpu") if not resume else ("",):
         Path(str(out) + suffix).unlink(missing_ok=True)
     cmd = [sys.executable, str(ROOT / "tools" / "arena_dump.py"), bot, *opps, "--maps", *maps, "--first-seed", str(first),
@@ -86,15 +87,29 @@ def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
         done = [json.loads(line) for line in open(games)]
         if done and all(r["res"] != "error" and "error" not in r for r in done):
             return done
-    rows, cpu = run_games(bot, opps, fset, out, j, remote, resume, float(os.environ.get("GATE_DEADLINE", "0") or 0))
-    mets = metrics_for(rows, dj, keep)
+    deadline = float(os.environ.get("GATE_DEADLINE", "0") or 0)
+    batches = SETS[fset][0] if os.environ.get("GATE_BATCH") else [None]
     table = []
-    for row, m in zip(rows, mets):
-        i, me, opp, mp, side, res, rounds, how, seed = row
-        c = cpu.get(i)
-        peak = (c[0] if side == "A" else c[1]) if c else None
-        table.append({"i": i, "bot": me, "opp": opp, "map": mp, "side": side, "seed": seed, "res": res, "rounds": rounds,
-                      "how": how, "cpu_peak": peak, **m})
+    for k, spec in enumerate(batches):
+        bout = out if spec is None else runs / f"{tag}_{fset}_b{k}.json"
+        bgames = Path(str(bout)[:-5] + "_games.jsonl")
+        if spec is not None and resume and bgames.exists():
+            table += [json.loads(line) for line in open(bgames)]
+            continue
+        rows, cpu = run_games(bot, opps, fset, bout, j, remote, resume, deadline, None if spec is None else [spec])
+        mets = metrics_for(rows, dj, keep)
+        part = []
+        for row, m in zip(rows, mets):
+            i, me, opp, mp, side, res, rounds, how, seed = row
+            c = cpu.get(i)
+            peak = (c[0] if side == "A" else c[1]) if c else None
+            part.append({"i": i, "bot": me, "opp": opp, "map": mp, "side": side, "seed": seed, "res": res, "rounds": rounds,
+                         "how": how, "cpu_peak": peak, **m})
+        if spec is not None:
+            with open(bgames, "w") as f:
+                for t in part:
+                    f.write(json.dumps(t) + "\n")
+        table += part
     with open(runs / f"{tag}_{fset}_games.jsonl", "w") as f:
         for t in table:
             f.write(json.dumps(t) + "\n")
