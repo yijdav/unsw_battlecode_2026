@@ -29,12 +29,12 @@ def sign_p(g, l):
     return min(1.0, 2 * sum(math.comb(n, x) for x in range(min(g, l) + 1)) / 2 ** n)
 
 
-def run_games(bot, opps, fset, out, j, remote):
+def run_games(bot, opps, fset, out, j, remote, resume):
     maps, first = SETS[fset]
-    for suffix in ("", ".partial", ".cpu"):
+    for suffix in ("", ".partial", ".cpu") if not resume else ("",):
         Path(str(out) + suffix).unlink(missing_ok=True)
     cmd = [sys.executable, str(ROOT / "tools" / "arena_dump.py"), bot, *opps, "--maps", *maps, "--first-seed", str(first),
-           "--sandbox", "-j", str(j), "--dump", str(out)]
+           "--sandbox", "-j", str(j), "--dump", str(out)] + (["--resume"] if resume else [])
     if remote:
         cmd += ["--remote", remote]
     subprocess.run(cmd, cwd=ROOT, check=True)
@@ -42,7 +42,10 @@ def run_games(bot, opps, fset, out, j, remote):
     cpu = {}
     if Path(str(out) + ".cpu").exists():
         for line in open(str(out) + ".cpu"):
-            r = json.loads(line)
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
             cpu[r[0]] = r[1:]
     return rows, cpu
 
@@ -71,10 +74,10 @@ def metrics_for(rows, j, keep):
     return got
 
 
-def collect(bot, fset, opps, runs, tag, j, remote, keep):
+def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
     out = runs / f"{tag}_{fset}.json"
-    rows, cpu = run_games(bot, opps, fset, out, j, remote)
-    mets = metrics_for(rows, j, keep)
+    rows, cpu = run_games(bot, opps, fset, out, j, remote, resume)
+    mets = metrics_for(rows, dj, keep)
     table = []
     for row, m in zip(rows, mets):
         i, me, opp, mp, side, res, rounds, how, seed = row
@@ -88,13 +91,13 @@ def collect(bot, fset, opps, runs, tag, j, remote, keep):
     return table
 
 
-def base_rows(fset, opps, runs, j, remote, keep, base):
+def base_rows(fset, opps, runs, j, remote, keep, base, resume=False, dj=6):
     key = json.loads(json.dumps({"base": bot_key(base), "opps": {o: bot_key(o) for o in opps}, "set": SETS[fset]}))
     meta = runs / f"base_{fset}_key.json"
     games = runs / f"base_{fset}_games.jsonl"
     if meta.exists() and games.exists() and json.load(open(meta)) == key:
         return [json.loads(line) for line in open(games)]
-    rows = collect(base, fset, opps, runs, "base", j, remote, keep)
+    rows = collect(base, fset, opps, runs, "base", j, remote, keep, resume, dj)
     json.dump(key, open(meta, "w"))
     return rows
 
@@ -190,10 +193,12 @@ def main():
     ap.add_argument("--opps", nargs="*", default=OPPS)
     ap.add_argument("--base", default="v_base")
     ap.add_argument("--runs", default="runs")
-    ap.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    ap.add_argument("-j", type=int, default=8)
     ap.add_argument("--remote", default=os.environ.get("ARENA_REMOTE"))
     ap.add_argument("--keep-replays", action="store_true")
     ap.add_argument("--report-only", action="store_true")
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--decode-j", type=int, default=6)
     args = ap.parse_args()
     runs = ROOT / args.runs
     runs.mkdir(parents=True, exist_ok=True)
@@ -202,8 +207,8 @@ def main():
         base = [json.loads(x) for x in open(runs / f"base_{args.set}_games.jsonl")]
         cand = [json.loads(x) for x in open(runs / f"{tag}_{args.set}_games.jsonl")]
     else:
-        base = base_rows(args.set, args.opps, runs, args.j, args.remote, args.keep_replays, args.base)
-        cand = collect(args.candidate, args.set, args.opps, runs, tag, args.j, args.remote, args.keep_replays)
+        base = base_rows(args.set, args.opps, runs, args.j, args.remote, args.keep_replays, args.base, args.resume, args.decode_j)
+        cand = collect(args.candidate, args.set, args.opps, runs, tag, args.j, args.remote, args.keep_replays, args.resume, args.decode_j)
     text, ok = report(cand, base, args.candidate, args.set)
     (runs / f"{tag}_{args.set}_report.md").write_text(text, encoding="utf-8")
     print(text)

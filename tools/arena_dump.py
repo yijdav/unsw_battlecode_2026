@@ -193,6 +193,7 @@ def main():
     ap.add_argument("--first-seed", type=int, default=1)
     ap.add_argument("--extra", nargs="*", default=[])
     ap.add_argument("--extra-opps", nargs="*")
+    ap.add_argument("--resume", action="store_true", help="keep the games already in <dump>.partial and play only the rest")
     args = ap.parse_args()
 
     maps = []
@@ -236,8 +237,21 @@ def main():
     owner = {}
     lock = threading.Lock()
     pending = queue.Queue()
+    done = set()
+    if args.resume and args.dump and os.path.exists(args.dump + ".partial"):
+        for line in open(args.dump + ".partial"):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            i = row[0]
+            if 0 <= i < len(jobs) and tuple(row[1:3]) == jobs[i][:2] and row[8] == jobs[i][5] and row[4] == jobs[i][6]:
+                results[i] = tuple(row[1:9])
+                done.add(i)
+        print(f"resuming: {len(done)} of {len(jobs)} games already played", file=sys.stderr)
     for i in range(len(jobs)):
-        pending.put(i)
+        if i not in done:
+            pending.put(i)
 
     def record(i, text, where):
         outcome = parse(text)
