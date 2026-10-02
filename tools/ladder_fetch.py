@@ -53,16 +53,31 @@ def games(team, map_id, page=1):
     return devalue(node["data"])["matches"]
 
 
+def leaderboard():
+    if os.environ.get("BC_API_KEY"):
+        return fetch(API + "leaderboard", auth=True)
+    board, page, pages = [], 1, 1
+    while page <= pages:
+        d = fetch(f"{SITE}/leaderboard/__data.json?page={page}")
+        v = devalue([n for n in d["nodes"] if n and n.get("type") == "data"][-1]["data"])
+        board += v["teams"]
+        pages = v["pages"]
+        page += 1
+    return board
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--teams", nargs="*", type=int, default=[])
     ap.add_argument("--per-map", type=int, default=4)
+    ap.add_argument("--pages", type=int, default=1)
+    ap.add_argument("--unranked", action="store_true", help="also keep unranked and challenge games")
     ap.add_argument("--since", default="2026-10-01T00:00:00")
     ap.add_argument("--out", default=str(ROOT / "notes" / "2026-10-02-research" / "manifest.jsonl"))
     ap.add_argument("--replays", default=str(ROOT / "replays" / "ladder"))
     args = ap.parse_args()
-    board = fetch(API + "leaderboard", auth=True)
+    board = leaderboard()
     elo = {t["id"]: t["elo"] for t in board}
     names = {t["id"]: t["name"] for t in board}
     teams = [t["id"] for t in board[:args.top]] + [t for t in args.teams if t not in [x["id"] for x in board[:args.top]]]
@@ -77,11 +92,13 @@ def main():
         got_team = 0
         for name, mid in MAPS.items():
             kept = 0
-            for m in games(team, mid):
+            for m in (m for page in range(1, args.pages + 1) for m in games(team, mid, page)):
                 at = m["at"][1] if isinstance(m["at"], list) else m["at"]
                 if kept >= args.per_map or at < args.since:
                     break
-                if not (m["ranked"] and m["status"] == "completed" and m["hasReplay"]) or m["challenge"] or m["tournament"]:
+                if not (m["status"] == "completed" and m["hasReplay"]) or m["tournament"]:
+                    continue
+                if not args.unranked and (not m["ranked"] or m["challenge"]):
                     continue
                 kept += 1
                 if m["id"] in have:
@@ -92,7 +109,7 @@ def main():
                     if not blob:
                         continue
                     path.write_bytes(blob)
-                row = {"id": m["id"], "at": at, "map": m["mapName"], "winner": m["winner"], "focus": team,
+                row = {"id": m["id"], "at": at, "map": m["mapName"], "winner": m["winner"], "focus": team, "ranked": m["ranked"] and not m["challenge"],
                        "a": dict(m["a"], elo_now=elo.get(m["a"]["id"])), "b": dict(m["b"], elo_now=elo.get(m["b"]["id"]))}
                 with open(out, "a", encoding="utf-8") as f:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")

@@ -28,6 +28,7 @@ struct Knobs {
     int sl_feed_start = 300;
     int tr_feed_start = 0;
     int sc_feed_start = 0;
+    int au_feed_start = 0;
     int crowded_pearls = 6;
     bool escape_split = true;
     double explore_value = 0.1177;
@@ -191,6 +192,8 @@ struct Knobs {
     int champ_lock_round = 200;
     double champ_pearl_mult = 2;
     bool tube_farm = false;
+    int tail_strike = 0;
+    bool ts_moved = true;
 } K;
 
 int W, H, N;
@@ -661,6 +664,7 @@ void turn(unswbc::Controller& ct) {
     if (K.sl_feed_start > 0 && W == 63 && H == 27) feed_start = K.sl_feed_start;
     if (K.tr_feed_start > 0 && W == 48 && H == 24) feed_start = K.tr_feed_start;
     if (K.sc_feed_start > 0 && W == 60 && H == 40) feed_start = K.sc_feed_start;
+    if (K.au_feed_start > 0 && W == 54 && H == 18) feed_start = K.au_feed_start;
     bool const feed_phase = round_num >= feed_start;
     bool split_turn = false;
     double const blind_land = prior_on && K.pr_blind_land >= 0 ? K.pr_blind_land : K.blind_land;
@@ -1438,6 +1442,19 @@ void turn(unswbc::Controller& ct) {
             std::reverse(moves.begin(), moves.end());
             ct.make_moves(moves);
             ct.set_indicator_string("sprint");
+            goto sonar;
+        }
+    }
+    if (K.tail_strike > 0 && tail >= 0 && L >= 4 && !best.attack && ct.can_split(2)) {
+        for (auto const& e : enemies) {
+            if (e.len < K.tail_strike || (K.ts_moved && occ_id[e.head] > my_id)) continue;
+            bool near = false;
+            for (int d = 0; d < 4 && !near; ++d) near = step(tail, d) == e.head;
+            if (!near) continue;
+            ct.do_split(2);
+            note_split(2);
+            ct.set_indicator_string("strike");
+            split_turn = true;
             goto sonar;
         }
     }
