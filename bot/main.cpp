@@ -194,6 +194,8 @@ struct Knobs {
     bool tube_farm = false;
     int tail_strike = 0;
     bool ts_moved = true;
+    int pearl_sprint = 0;
+    int ps_contest = 3;
 } K;
 
 int W, H, N;
@@ -1546,6 +1548,21 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
+    if (K.pearl_sprint > 0 && round_num >= K.pearl_sprint && best.valid && !best.attack && !best.trap && L >= 3) {
+        int const n1 = step(head, best.dir);
+        if (n1 >= 0 && pearl_seen[n1] == round_num) {
+            for (int d = 0; d < 4; ++d) {
+                int const n2 = step(n1, d);
+                if (n2 < 0 || n2 == head || occupied(n2) || pearl_seen[n2] != round_num || threat(n2, true) <= 0) continue;
+                bool contested = false;
+                for (auto const& e : enemies) if (manhattan(e.head, n2) <= K.ps_contest) contested = true;
+                if (!contested || is_trap(bfs(n2, L + 1, cap), L + 1)) continue;
+                ct.make_moves(std::vector<Direction>{DIRS[best.dir], DIRS[d]});
+                ct.set_indicator_string("PS");
+                goto sonar;
+            }
+        }
+    }
     if (best.valid) {
         ct.make_move(DIRS[best.dir]);
         bool vp = false, pn = false;
