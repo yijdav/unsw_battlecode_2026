@@ -179,8 +179,8 @@ struct Knobs {
     int sym_conf = 0;
     double portal_reserve = 0;
     int portal_turns = 0;
-    int mapbook = 0;
-    int book_rounds = 150;
+    int mapbook = 4096;
+    int book_rounds = 60;
     int book_region_cap = 3;
     double book_w = 10;
     int book_min_len = 3;
