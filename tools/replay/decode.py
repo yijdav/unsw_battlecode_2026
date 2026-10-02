@@ -1,9 +1,12 @@
-import json, struct, sys
+import gzip, json, struct, sys
 from collections import deque
 
 BITS = [[b for b in range(8) if t >> b & 1] for t in range(256)]
 DIRS = {0: (0, -1), 1: (1, 0), 2: (0, 1), 3: (-1, 0)}
 REASONS = ['wall', 'self', 'body', 'head', 'novalid']
+SNAPS = (25, 50, 100, 200, 300, 400)
+ZONES = (25, 50, 100)
+GZIP = bytes([31, 139])
 
 
 def unpack(data):
@@ -235,11 +238,16 @@ def team_stats():
     return {'alive_r100': None, 'pearls_r100': 0, 'behind_portal_pearls_r100': 0, 'first_cross': None,
             'crossings_r100': 0, 'own_coll_deaths': 0, 'own_coll_portal': 0, 'champ_feed_deaths': 0,
             'small_head_deaths_by_enemy': 0, 'tube_deaths': 0, 'deaths': {r: 0 for r in REASONS}, 'longest_feed_start': None,
-            'cpu_peak': 0, 'cpu_p99': 0, 'final_longest': None, 'final_count': None}
+            'cpu_peak': 0, 'cpu_p99': 0, 'final_longest': None, 'final_count': None,
+            'snap': {}, 'zone': {}, 'splits': [0, 0, 0], 'rams': [0, 0, 0], 'pearls_spawn': 0, 'pearls_drop': 0,
+            'champ_own_drop': [0] * 10}
 
 
 def decode(path):
-    msg = Msg(unpack(open(path, 'rb').read()))
+    data = open(path, 'rb').read()
+    if data[:2] == GZIP:
+        data = gzip.decompress(data)
+    msg = Msg(unpack(data))
     root = msg.ptr(0, 0)
     board = Board(msg.text(msg.sptr(root, 0)))
     W, H = board.W, board.H
@@ -255,6 +263,9 @@ def decode(path):
     cpu = [[], []]
     rnd = 0
     longest_id = [None, None]
+    dead_cells = {}
+    centre = (W // 2, H // 2)
+    radius = max(2, min(W, H) // 4)
     cur = None
     dirs = []
     done = 0
@@ -268,6 +279,21 @@ def decode(path):
                 if len(b) > best[team[did]][0]:
                     best[team[did]] = (len(b), did)
             longest_id = [best[0][1], best[1][1]]
+            if rnd in SNAPS:
+                for t in (0, 1):
+                    mine = [len(b) for d, b in body.items() if team[d] == t]
+                    st[t]['snap'][rnd] = {'count': len(mine), 'total': sum(mine), 'longest': max(mine, default=0)}
+            if rnd in ZONES:
+                for t in (0, 1):
+                    z = {'centre': 0, 'behind': 0, 'other': 0}
+                    for d, b in body.items():
+                        if team[d] != t or not b:
+                            continue
+                        hx, hy = b[0]
+                        dx = min(abs(hx - centre[0]), W - abs(hx - centre[0]))
+                        dy = min(abs(hy - centre[1]), H - abs(hy - centre[1]))
+                        z['centre' if max(dx, dy) <= radius else 'behind' if b[0] in behind else 'other'] += 1
+                    st[t]['zone'][rnd] = z
             for t in (0, 1):
                 if rnd == 100:
                     st[t]['alive_r100'] = sum(1 for d in body if team[d] == t)
@@ -279,11 +305,20 @@ def decode(path):
             dirs = []
             done = 0
         elif which == 3:
-            if not msg.bit(p, 0) and cur is not None and cur in team and rnd < 100:
+            if not msg.bit(p, 0) and cur is not None and cur in team:
                 t = team[cur]
-                st[t]['pearls_r100'] += 1
-                if msg.point(msg.sptr(p, 0)) in behind:
-                    st[t]['behind_portal_pearls_r100'] += 1
+                cell = msg.point(msg.sptr(p, 0))
+                src = dead_cells.get(cell)
+                if src and rnd - src[0] <= 40:
+                    st[t]['pearls_drop'] += 1
+                    if src[1] == t and cur == longest_id[t]:
+                        st[t]['champ_own_drop'][min(rnd // 50, 9)] += 1
+                else:
+                    st[t]['pearls_spawn'] += 1
+                if rnd < 100:
+                    st[t]['pearls_r100'] += 1
+                    if cell in behind:
+                        st[t]['behind_portal_pearls_r100'] += 1
         elif which == 4:
             did = msg.i32(p, 0)
             act = msg.sptr(p, 0)
@@ -314,6 +349,7 @@ def decode(path):
             par = msg.i32(p, 0)
             child = msg.i32(p, 4)
             team[child] = msg.u16(p, 8)
+            st[team[child]]['splits'][0 if rnd < 100 else 1 if rnd < 300 else 2] += 1
             body[par] = deque(msg.point(q) for q in msg.structs(msg.sptr(p, 0)))
             body[child] = deque(msg.point(q) for q in msg.structs(msg.sptr(p, 1)))
         elif which == 11:
@@ -337,6 +373,10 @@ def decode(path):
                             break
                 elif cur is not None and cur != did and reason == 3:
                     killer = cur
+            if reason == 3 and did == cur and killer is not None and killer in team and team[killer] != t:
+                st[t]['rams'][0 if rnd < 100 else 1 if rnd < 300 else 2] += 1
+            for c in b:
+                dead_cells[c] = (rnd, t)
             if killer is not None and killer in team:
                 if team[killer] == t:
                     st[t]['own_coll_deaths'] += 1
