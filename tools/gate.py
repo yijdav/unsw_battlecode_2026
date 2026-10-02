@@ -116,13 +116,18 @@ def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
     return table
 
 
+def base_prefix(base):
+    return "base" if base == "v_base" else f"base_{base}"
+
+
 def base_rows(fset, opps, runs, j, remote, keep, base, resume=False, dj=6):
     key = json.loads(json.dumps({"base": bot_key(base), "opps": {o: bot_key(o) for o in opps}, "set": SETS[fset]}))
-    meta = runs / f"base_{fset}_key.json"
-    games = runs / f"base_{fset}_games.jsonl"
+    pre = base_prefix(base)
+    meta = runs / f"{pre}_{fset}_key.json"
+    games = runs / f"{pre}_{fset}_games.jsonl"
     if meta.exists() and games.exists() and json.load(open(meta)) == key:
         return [json.loads(line) for line in open(games)]
-    rows = collect(base, fset, opps, runs, "base", j, remote, keep, resume, dj)
+    rows = collect(base, fset, opps, runs, pre, j, remote, keep, resume, dj)
     json.dump(key, open(meta, "w"))
     return rows
 
@@ -135,7 +140,7 @@ def replay_result(bot, opp, mp, side, seed):
     return winner if winner in ("draw", "error") else ("win" if winner == side else "loss")
 
 
-def verify(cand, base, cname, bname, path, j):
+def verify(cand, base, cname, bname, path, j, fset="main"):
     done = {}
     if path.exists():
         for line in open(path):
@@ -151,7 +156,7 @@ def verify(cand, base, cname, bname, path, j):
         todo.append((k, r, b))
     deadline = float(os.environ.get("GATE_DEADLINE", "0") or 0)
     lock = threading.Lock()
-    recheck_path = path.parent / "base_main_recheck.jsonl"
+    recheck_path = path.parent / f"{base_prefix(bname)}_{fset}_recheck.jsonl"
     recheck = {}
     if recheck_path.exists():
         for line in open(recheck_path):
@@ -202,7 +207,7 @@ def fmt(x):
     return "-" if x is None else (f"{x:.1f}" if isinstance(x, float) else str(x))
 
 
-def report(cand, base, cname, fset, checked=None):
+def report(cand, base, cname, fset, checked=None, bname="v_base"):
     checked = checked or {}
     bmap = {(r["opp"], r["map"], r["seed"], r["side"]): r for r in base}
     pairs = []
@@ -218,7 +223,7 @@ def report(cand, base, cname, fset, checked=None):
                 fixed += 1
             r, b = dict(r, res=v["cand"]), dict(b, res=v["base"])
         pairs.append((r, b))
-    lines = [f"# Gate: {cname} vs v_base ({fset} set, {len(pairs)} paired fixtures)", "",
+    lines = [f"# Gate: {cname} vs {bname} ({fset} set, {len(pairs)} paired fixtures)", "",
              f"Flipped fixtures replayed twice per side: {len(checked)}; results corrected by the majority of three: {fixed}.", ""]
 
     def flips(sel):
@@ -289,7 +294,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("candidate")
     ap.add_argument("--tag")
-    ap.add_argument("--set", default="main", choices=list(SETS))
+    ap.add_argument("--set", default="main")
     ap.add_argument("--opps", nargs="*", default=OPPS)
     ap.add_argument("--base", default="v_base")
     ap.add_argument("--runs", default="runs")
@@ -300,18 +305,24 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--decode-j", type=int, default=6)
     ap.add_argument("--no-verify", action="store_true")
+    ap.add_argument("--maps", nargs="*", help="custom fixture set, e.g. maps/ladder/trophy.map:40; named by --set")
+    ap.add_argument("--first-seed", type=int, default=1)
     args = ap.parse_args()
+    if args.maps:
+        SETS[args.set] = (args.maps, args.first_seed)
+    if args.set not in SETS:
+        ap.error(f"unknown set {args.set}; give --maps to define it")
     runs = ROOT / args.runs
     runs.mkdir(parents=True, exist_ok=True)
     tag = args.tag or args.candidate
     if args.report_only:
-        base = [json.loads(x) for x in open(runs / f"base_{args.set}_games.jsonl")]
+        base = [json.loads(x) for x in open(runs / f"{base_prefix(args.base)}_{args.set}_games.jsonl")]
         cand = [json.loads(x) for x in open(runs / f"{tag}_{args.set}_games.jsonl")]
     else:
         base = base_rows(args.set, args.opps, runs, args.j, args.remote, args.keep_replays, args.base, args.resume, args.decode_j)
         cand = collect(args.candidate, args.set, args.opps, runs, tag, args.j, args.remote, args.keep_replays, args.resume, args.decode_j)
-    checked = {} if args.no_verify else verify(cand, base, args.candidate, args.base, runs / f"{tag}_{args.set}_verify.jsonl", args.j)
-    text, ok = report(cand, base, args.candidate, args.set, checked)
+    checked = {} if args.no_verify else verify(cand, base, args.candidate, args.base, runs / f"{tag}_{args.set}_verify.jsonl", args.j, args.set)
+    text, ok = report(cand, base, args.candidate, args.set, checked, args.base)
     (runs / f"{tag}_{args.set}_report.md").write_text(text, encoding="utf-8")
     print(text)
     print("GATE", "PASS" if ok else "FAIL", "(item 4 still to judge)")
