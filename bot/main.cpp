@@ -26,7 +26,7 @@ struct Knobs {
     int pf_feed_start = 200;
     int pf_maps = 2;
     int sl_feed_start = 300;
-    int tr_feed_start = 0;
+    int tr_feed_start = 350;
     int sc_feed_start = 0;
     int au_feed_start = 0;
     int crowded_pearls = 6;
@@ -180,7 +180,7 @@ struct Knobs {
     int sym_conf = 0;
     double portal_reserve = 0;
     int portal_turns = 0;
-    int mapbook = 4096;
+    int mapbook = 5120;
     int book_rounds = 60;
     int book_region_cap = 3;
     double book_w = 10;
