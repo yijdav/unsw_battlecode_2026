@@ -4,7 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SSH_BASE = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+SSH_BASE = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=6"]
 SSH_MUX = ["-o", "ControlMaster=auto", "-o", f"ControlPath={Path.home()}/.ssh/cm-bc-%C", "-o", "ControlPersist=600"]
 SSH_OPTS = SSH_BASE + SSH_MUX
 

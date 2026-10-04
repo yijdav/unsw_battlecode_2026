@@ -196,6 +196,10 @@ struct Knobs {
     bool ts_moved = true;
     int pearl_sprint = 0;
     int ps_contest = 3;
+    int keep_long_len = 0;
+    int keep_until = 300;
+    int keep_maps = 16384;
+    bool map_knobs_on = true;
     int sprint_rule = 0;
     int sprint_reach_cap = 0;
     int q_split_until = 1000;
@@ -219,13 +223,15 @@ struct Knobs {
     double q_land = 0;
     int q_hunt_units = 2;
     int q_min_units = 0;
+    bool q_log = false;
 } K;
 
 int W, H, N;
 int round_num;
 int my_id;
 unswbc::Team my_team = unswbc::Team::A;
-int my_queen = 0, foe_queen = 1;
+int my_queen = -1, foe_queen = -1;
+bool queen_known = false;
 inline int free_steps(int len) { return K.sprint_rule ? (len + 3) / 4 : 1; }
 inline int max_steps(int len) { return K.sprint_rule ? (len + 3) / 4 + len - 2 : len - 1; }
 int dir_index(Direction d) {
@@ -331,6 +337,18 @@ void apply_prior(PriorMap const& pm) {
     if (K.pr_fount_mask & pm.bit)
         for (int c : pm.founts) { prior_fount[c] = 1; quick_seen[c] = 3; }
     prior_on = true;
+}
+
+void apply_map_knobs() {
+    static bool done = false;
+    if (done || !map_bit || !K.map_knobs_on) return;
+    done = true;
+    switch (map_bit) {
+    case 16384:
+        K.keep_long_len = 10;
+        break;
+    default: break;
+    }
 }
 
 void check_prior(std::vector<unswbc::Tile> const& tiles) {
@@ -704,13 +722,15 @@ void turn(unswbc::Controller& ct) {
     int const L = ct.get_length();
     auto const& tiles = ct.get_tiles();
     int const head = cell_of(ct.get_position().x, ct.get_position().y);
-    bool const am_queen = my_id == my_queen;
+    bool const am_queen = my_id < 2;
     bool const qs = am_queen && K.q_safe > 0;
     bool const qn = am_queen && K.q_no_ram;
     bool const qm = am_queen && round_num >= K.q_split_until;
     int const qk = am_queen ? K.q_keep : 0;
     int const big_k = L - std::max(2, qk);
     if (!prior_checked && (K.map_prior || K.open_maps || K.detect_maps || K.mapbook)) check_prior(tiles);
+    if (K.map_knobs_on && !map_bit) map_bit = (W == 63 && H == 27) ? 16384 : (W == 48 && H == 24) ? 32768 : (W == 54 && H == 18) ? 65536 : 0;
+    apply_map_knobs();
     int feed_start = (N >= 2048) ? K.feed_start_big : K.feed_start_small;
     if (K.pf_feed_start > 0 && (map_bit & K.pf_maps)) feed_start = K.pf_feed_start;
     if (K.sl_feed_start > 0 && W == 63 && H == 27) feed_start = K.sl_feed_start;
@@ -780,7 +800,7 @@ void turn(unswbc::Controller& ct) {
         else friend_heads.push_back(c);
     }
     int q_target = -1;
-    for (auto const& e : enemies) if (occ_id[e.head] == foe_queen) q_target = e.head;
+    for (auto const& e : enemies) if (occ_id[e.head] < 2) q_target = e.head;
     bool const qh = K.q_hunt_len > 0 && !am_queen && L <= K.q_hunt_len;
 
     if (!K.history_dedupe || history.empty() || history.front() != head) history.push_front(head);
@@ -865,6 +885,21 @@ void turn(unswbc::Controller& ct) {
     for (auto it = reports.begin(); it != reports.end();) {
         if (it->second.round < round_num - 3 * STALE) it = reports.erase(it); else ++it;
     }
+    if (my_id < 2) { my_queen = my_id; queen_known = true; }
+    if (!queen_known) {
+        for (int q = 0; q < 2 && !queen_known; ++q) if (reports.count(q)) { my_queen = q; queen_known = true; }
+        for (int c : visible_cells)
+            if (!queen_known && occupied(c) && occ_id[c] >= 0 && occ_id[c] < 2) { my_queen = occ_enemy[c] ? 1 - occ_id[c] : occ_id[c]; queen_known = true; }
+        if (!queen_known && my_queen < 0 && round_num == 0 && turns_alive == 1) {
+            bool child = false;
+            for (int c : visible_cells)
+                if (occupied(c) && !occ_enemy[c] && occ_id[c] >= 0 && occ_id[c] < my_id && (occ_id[c] & 1) != (my_id & 1)) child = true;
+            for (auto const& [id, r] : reports) if (id < my_id && (id & 1) != (my_id & 1)) child = true;
+            if (!child) my_queen = my_id & 1;
+        }
+    }
+    foe_queen = my_queen < 0 ? -1 : 1 - my_queen;
+    if (K.q_log) ct.output_log("Q", int(am_queen), my_queen, int(queen_known));
     if (K.q_champ && K.q_feed_start > 0 && queen_alive()) {
         feed_start = K.q_feed_start;
         feed_phase = round_num >= feed_start;
@@ -905,8 +940,12 @@ void turn(unswbc::Controller& ct) {
         if (e.len >= K.sighting_len && (!sighting_fresh() || e.len >= sighting.len || chebyshev(e.head, sighting.cell) <= 3))
             sighting = {e.len, e.head, round_num};
     if (K.q_hunt_report || K.q_hunt_w > 0) {
-        if (q_target >= 0) q_sight = {seg_count[foe_queen], q_target, round_num};
-        else if (q_sight.cell >= 0 && chebyshev(head, q_sight.cell) <= 1 && !seg_count.count(foe_queen)) q_sight.cell = -1;
+        if (q_target >= 0) q_sight = {seg_count[occ_id[q_target]], q_target, round_num};
+        else if (q_sight.cell >= 0 && chebyshev(head, q_sight.cell) <= 1) {
+            bool foe_q_vis = false;
+            for (int c : visible_cells) if (occupied(c) && occ_enemy[c] && occ_id[c] < 2) foe_q_vis = true;
+            if (!foe_q_vis) q_sight.cell = -1;
+        }
     }
 
     int hunt = -1;
@@ -933,7 +972,7 @@ void turn(unswbc::Controller& ct) {
     bool const guard = guard_head >= 0;
 
     bool feed_blocked = false;
-    if (K.feed_guard && champ_visible && !(K.q_feed_long && K.q_champ && champ == my_queen)) {
+    if (K.feed_guard && champ_visible && !(K.q_feed_long && K.q_champ && (champ == 0 || champ == 1))) {
         int const vis = seg_count[champ];
         int const clen = partial.count(champ) ? std::max(vis, reports[champ].len) : vis;
         if (clen < L + K.feed_margin) feed_blocked = true;
@@ -1361,7 +1400,7 @@ void turn(unswbc::Controller& ct) {
             int md = manhattan(t, f);
             bool is_champ = feed_phase && occ_id[f] == champ;
             if (md <= 1) s -= is_champ ? 800 : (am_champion ? 200 : 12);
-            if (K.q_room > 0 && occ_id[f] == my_queen && md <= 2) s -= md <= 1 ? K.q_room : K.q_room / 4;
+            if (K.q_room > 0 && occ_id[f] < 2 && md <= 2) s -= md <= 1 ? K.q_room : K.q_room / 4;
             else if (md == 2 && am_champion) s -= 20;
         }
         if (via_portal && seen_round[t] != round_num && opening && K.open_blind >= 0 && !am_champion) {
@@ -1684,7 +1723,7 @@ void turn(unswbc::Controller& ct) {
         }
     }
 
-    if (!feed_phase && !locked && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0 &&
+    if (!feed_phase && !locked && !(K.keep_long_len > 0 && L >= K.keep_long_len && round_num < K.keep_until && (map_bit & K.keep_maps)) && round_num < feed_start - 15 && L >= K.split_at && ct.can_split(2) && tail >= 0 &&
         ((!qm && L - 2 >= qk) || (am_queen && units < K.q_min_units)) &&
         (K.split_reserve <= 0 || units < unswbc::game->get_unit_limit() - K.split_reserve)) {
         auto has_exit = [&](int from, int avoid) {
@@ -1797,8 +1836,6 @@ int main() {
     auto [ct, game] = unswbc::init();
     W = game.width; H = game.height; N = W * H;
     my_id = ct.get_id(); my_team = ct.get_team();
-    my_queen = my_team == unswbc::Team::A ? 0 : 1;
-    foe_queen = 1 - my_queen;
     rng.s ^= uint64_t(my_id + 1) * 0x9E3779B97F4A7C15ull;
     for (int i = 0; i < 4; ++i) rng.next();
     edge_n.assign(N, 0); edge_w.assign(N, 0); portal_n.assign(N, -1); portal_w.assign(N, -1);

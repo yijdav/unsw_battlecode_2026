@@ -11,10 +11,21 @@ from decode import decode
 
 OPPS = ["v_base", "sb_bang", "sb_python_io", "sb_heartbreaker", "ai_like", "opp_nicked_arch4"]
 ARCH = "opp_nicked_arch4"
+L17_ONE = ["australia", "autarky", "default", "islands", "maze", "portals", "stripes", "tower", "trauma", "trophy", "unsw", "weakhold"]
+L17_TWO = ["devil", "devil_f", "dilemma", "dilemma10", "qos", "qos_e", "school", "school_k", "slithery", "slithery_x"]
+
+
+def ladder17(folder, first):
+    return [f"maps/{folder}/{m}.map:{first + 3}" for m in L17_ONE] + [f"maps/{folder}/{m}.map:{first + 1}" for m in L17_TWO]
+
+
 SETS = {
-    "main": (["maps/ladder:3", "maps/generated:2", "maps/portal_heavy:2"], 1),
-    "fresh": (["maps/ladder:6"], 4),
+    "main": (ladder17("ladder17", 1) + ["maps/generated:2", "maps/portal_heavy:2"], 1),
+    "fresh": (ladder17("ladder17", 21), 21),
+    "flip": (ladder17("ladder17_flip", 1), 1),
     "holdout": (["maps/holdout:2"], 1),
+    "main_old": (["maps/ladder:3", "maps/generated:2", "maps/portal_heavy:2"], 1),
+    "fresh_old": (["maps/ladder:6"], 4),
     "smoke": (["maps/ladder/portals.map:1", "maps/ladder/trauma.map:1"], 1),
 }
 BASE_METRICS = ["alive_r100", "pearls_r100", "behind_portal_pearls_r100", "first_cross", "crossings_r100", "own_coll_deaths",
@@ -285,7 +296,7 @@ def report(cand, base, cname, fset, checked=None, bname="v_base"):
         l = sum(1 for r, b in sel if SCORE[r["res"]] < SCORE[b["res"]])
         return g, l, len(sel) - g - l, sign_p(g, l)
 
-    groups = [("overall", pairs), ("ladder", [p for p in pairs if p[0]["map"].startswith("ladder/")]),
+    groups = [("overall", pairs), ("ladder", [p for p in pairs if p[0]["map"].split("/")[0] in ("ladder", "ladder17", "ladder17_flip")]),
               ("vs " + ARCH, [p for p in pairs if p[0]["opp"] == ARCH])]
     for o in sorted({p[0]["opp"] for p in pairs}):
         if o != ARCH:
