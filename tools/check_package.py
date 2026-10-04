@@ -19,15 +19,16 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = pathlib.Path(__file__).resolve().parent
-DEFAULT_BOT = pathlib.Path(HERE.parent / "bot")
-DEFAULT_REPO = pathlib.Path(HERE.parent)
-TOOLKIT = "unswbc==1.2.2"
-JUDGE_VERSION = "1.2.2"
-HELPER_SHA_1_2_2 = "9f080746e6e18c73657245e00c9dda2581f6f534fa90d11d78556924b9290152"
+DEFAULT_BOT = HERE.parent / "bot"
+DEFAULT_REPO = HERE.parent
+TOOLKIT = "unswbc==1.2.9"
+JUDGE_VERSION = "1.2.9"
+HELPER_SHA = "ca57d2398f309144ce98f6c899d28847672cd9914ff8be03afdbb0379e7365b7"
 MAX_ZIP_BYTES = 4 * 1024 * 1024
 TURN_POINTS = 100_000_000
 MEMORY_BYTES = 768 * 65536
-MAPS = ["maps/ladder/default.map", "maps/big_empty.map", "maps/ladder/slithery_fight.map"]
+MAPS = ["maps/ladder/default.map", "maps/big_empty.map", "maps/ladder/slithery_fight.map", "maps/ladder/australia.map",
+        "maps/ladder/unsw.map"]
 MAX_PARALLEL_GAMES = 3
 BUILD_DIR_NAME = ".unswbc-build"
 LANGUAGES = {"py": "python", "python": "python", "cpp": "cpp", "c++": "cpp", "cxx": "cpp", "c": "c"}
@@ -566,7 +567,7 @@ def check_bot(path: pathlib.Path, label: str, work: pathlib.Path, uvx: str, info
     else:
         f.note(f"zip is {len(blob):,} bytes ({len(blob) / MAX_ZIP_BYTES:.2%} of the 4 MB limit), {len(names)} entries")
     check_entries(path, project, entries, f, data)
-    inspect_sources(path, [n for n in names if n != "bot.toml"], info.get("helper_hpp_sha", HELPER_SHA_1_2_2), f, data)
+    inspect_sources(path, [n for n in names if n != "bot.toml"], info.get("helper_hpp_sha", HELPER_SHA), f, data)
     unzipped = bundle / "unzipped" / label
     unzip_fresh(blob, unzipped, path, f)
     data["unzipped"] = str(unzipped)
@@ -680,7 +681,8 @@ def main() -> int:
     parser.add_argument("bots", nargs="*", type=pathlib.Path, default=[DEFAULT_BOT],
                         help=f"bot folders holding bot.toml (default {DEFAULT_BOT})")
     parser.add_argument("--label", action="append", default=None, help="a name per bot, in order")
-    parser.add_argument("--work", type=pathlib.Path, default=HERE / "runs", help="where zips, unzipped copies, logs go")
+    parser.add_argument("--work", type=pathlib.Path, default=HERE.parent / "replays" / "check_package",
+                        help="where zips, unzipped copies, logs go")
     parser.add_argument("--repo", type=pathlib.Path, default=DEFAULT_REPO, help="repo holding maps/")
     parser.add_argument("--maps", nargs="+", default=MAPS, help="maps relative to --repo, or absolute")
     parser.add_argument("--seed", type=int, default=20260929)

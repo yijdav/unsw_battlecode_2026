@@ -5,6 +5,7 @@ BITS = [[b for b in range(8) if t >> b & 1] for t in range(256)]
 DIRS = {0: (0, -1), 1: (1, 0), 2: (0, 1), 3: (-1, 0)}
 REASONS = ['wall', 'self', 'body', 'head', 'novalid']
 SNAPS = (25, 50, 100, 200, 300, 400)
+QUEEN_SNAPS = (100, 200, 300, 400)
 ZONES = (25, 50, 100)
 GZIP = bytes([31, 139])
 
@@ -240,7 +241,23 @@ def team_stats():
             'small_head_deaths_by_enemy': 0, 'tube_deaths': 0, 'deaths': {r: 0 for r in REASONS}, 'longest_feed_start': None,
             'cpu_peak': 0, 'cpu_p99': 0, 'final_longest': None, 'final_count': None,
             'snap': {}, 'zone': {}, 'splits': [0, 0, 0], 'rams': [0, 0, 0], 'pearls_spawn': 0, 'pearls_drop': 0,
-            'champ_own_drop': [0] * 10}
+            'champ_own_drop': [0] * 10, 'queen_id': None, 'queen_alive_end': None, 'queen_len_end': None,
+            'queen_death_round': None, 'queen_death_reason': None, 'queen_death_by': None, 'queen_killer_len': None,
+            'queen_splits': 0, 'queen_is_longest_end': None, **{f'queen_len_r{r}': None for r in QUEEN_SNAPS},
+            'enemy_queen_killed': 0, 'final_total': None, 'final_queen': None}
+
+
+def decided(winner, end_reason, a, b):
+    if winner == 'unfinished':
+        return None
+    if winner == 'draw':
+        return 'draw'
+    if end_reason == 0:
+        return 'elimination'
+    for name, x, y in zip(('queen', 'longest', 'total'), a, b):
+        if x != y:
+            return name
+    return 'length'
 
 
 def decode(path):
@@ -260,6 +277,14 @@ def decode(path):
         team[did] = t
         body[did] = deque(b)
     st = [team_stats(), team_stats()]
+    queen = {}
+    for did, t, b in board.dragons:
+        if t in (0, 1) and (t not in queen or did < queen[t]):
+            queen[t] = did
+    for t in queen:
+        st[t]['queen_id'] = queen[t]
+    partner = {}
+    gone = {}
     cpu = [[], []]
     rnd = 0
     longest_id = [None, None]
@@ -294,6 +319,9 @@ def decode(path):
                         dy = min(abs(hy - centre[1]), H - abs(hy - centre[1]))
                         z['centre' if max(dx, dy) <= radius else 'behind' if b[0] in behind else 'other'] += 1
                     st[t]['zone'][rnd] = z
+            if rnd in QUEEN_SNAPS:
+                for t in queen:
+                    st[t][f'queen_len_r{rnd}'] = len(body.get(queen[t], ()))
             for t in (0, 1):
                 if rnd == 100:
                     st[t]['alive_r100'] = sum(1 for d in body if team[d] == t)
@@ -304,6 +332,7 @@ def decode(path):
             cur = msg.i32(p, 0)
             dirs = []
             done = 0
+            partner = {}
         elif which == 3:
             if not msg.bit(p, 0) and cur is not None and cur in team:
                 t = team[cur]
@@ -350,6 +379,8 @@ def decode(path):
             child = msg.i32(p, 4)
             team[child] = msg.u16(p, 8)
             st[team[child]]['splits'][0 if rnd < 100 else 1 if rnd < 300 else 2] += 1
+            if par == queen.get(team.get(par)):
+                st[team[par]]['queen_splits'] += 1
             body[par] = deque(msg.point(q) for q in msg.structs(msg.sptr(p, 0)))
             body[child] = deque(msg.point(q) for q in msg.structs(msg.sptr(p, 1)))
         elif which == 11:
@@ -386,22 +417,56 @@ def decode(path):
                     st[t]['small_head_deaths_by_enemy'] += 1
             if rnd >= feed_start and did == longest_id[t] and len(b) >= 10:
                 st[t]['champ_feed_deaths'] += 1
+            if reason == 3 and cur is not None and did != cur:
+                partner[cur] = (did, len(b))
+            if did == queen.get(t):
+                q = st[t]
+                q['queen_death_round'] = rnd
+                q['queen_death_reason'] = REASONS[reason] if reason < len(REASONS) else str(reason)
+                if did == cur:
+                    q['queen_death_by'] = 'self_move'
+                    if reason == 3:
+                        other = partner.get(did)
+                        if other is None and done < len(dirs) and b:
+                            target, _ = board.step(b[0], dirs[done])
+                            other = next(((o, len(ob)) for o, ob in body.items() if o != did and ob and ob[0] == target), None)
+                        if other is not None:
+                            q['queen_killer_len'] = other[1]
+                elif cur is not None and cur in team:
+                    q['queen_death_by'] = 'ally_move' if team[cur] == t else 'enemy_move'
+                    q['queen_killer_len'] = len(body[cur]) if cur in body else gone.get(cur)
+                    if team[cur] != t:
+                        st[team[cur]]['enemy_queen_killed'] += 1
+            gone[did] = len(b)
             body.pop(did, None)
     for t in (0, 1):
         c = sorted(cpu[t])
         st[t]['cpu_peak'] = c[-1] if c else 0
         st[t]['cpu_p99'] = c[int(0.99 * (len(c) - 1))] if c else 0
+    for t in queen:
+        q = st[t]
+        mine = [len(b) for d, b in body.items() if team[d] == t]
+        qb = body.get(queen[t])
+        q['queen_alive_end'] = int(qb is not None)
+        q['queen_len_end'] = len(qb) if qb is not None else 0
+        q['queen_is_longest_end'] = int(qb is not None and len(qb) >= max(mine, default=0))
     res = msg.sptr(root, 4)
     winner = 'unfinished'
+    end_reason = None
     if res:
         winner = ('A', 'B')[msg.u16(res, 6)] if msg.u16(res, 4) == 1 else 'draw'
+        end_reason = msg.u16(res, 2)
         for t in (0, 1):
             s = msg.sptr(res, t)
             if s:
                 st[t]['final_count'] = msg.i32(s, 0)
                 st[t]['final_longest'] = msg.i32(s, 4)
+                st[t]['final_total'] = msg.i32(s, 8)
+                st[t]['final_queen'] = msg.i32(s, 12)
+    stand = [(st[t]['final_queen'] or 0, st[t]['final_longest'] or 0, st[t]['final_total'] or 0) for t in (0, 1)]
     return {'map': board.name, 'W': W, 'H': H, 'rounds': rnd, 'winner': winner,
-            'botA': msg.text(msg.sptr(root, 1)), 'botB': msg.text(msg.sptr(root, 2)), 'A': st[0], 'B': st[1]}
+            'botA': msg.text(msg.sptr(root, 1)), 'botB': msg.text(msg.sptr(root, 2)), 'A': st[0], 'B': st[1],
+            'end_reason': end_reason, 'decided_by': decided(winner, end_reason, *stand)}
 
 
 if __name__ == '__main__':

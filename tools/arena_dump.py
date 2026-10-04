@@ -61,10 +61,26 @@ def parse(text):
     m = re.search(r"team (A|B) wins after (\d+) rounds \(([^)]*)\)", text)
     if m:
         return m.group(1), int(m.group(2)), m.group(3)
-    m = re.search(r"draw after (\d+) rounds", text)
+    m = re.search(r"draw after (\d+) rounds(?: \(([^)]*)\))?", text)
     if m:
-        return "draw", int(m.group(1)), "draw"
+        return "draw", int(m.group(1)), "draw" if m.group(2) is None or re.fullmatch(r"[\d.]+s|\d+m\d+s", m.group(2)) else f"draw, {m.group(2)}"
     return "error", -1, "error"
+
+
+HOW = (("draw", "draw"), ("by elimination", "elimination"), ("longer queen", "queen"), ("longest dragon", "longest"),
+       ("total length", "total"), ("on length", "length"))
+
+
+def how_kind(how):
+    return next((kind for prefix, kind in HOW if (how or "").startswith(prefix)), "error")
+
+
+def decided_line(rows):
+    by = defaultdict(lambda: defaultdict(int))
+    for res, how in rows:
+        by[how_kind(how)][res] += 1
+    order = [k for _, k in HOW] + ["error"]
+    return ", ".join(f"{k} {by[k]['win']}-{by[k]['draw']}-{by[k]['loss']}" for k in order if k in by)
 
 
 def points(v):
@@ -404,6 +420,7 @@ def main():
         n = t["win"] + t["draw"] + t["loss"]
         err = f"  {t['error']} failed to run" if t["error"] else ""
         print(f"{me} vs {opp}: {t['win']}W {t['draw']}D {t['loss']}L  ({t['win'] / max(n, 1):.0%} wins of {n}){err}")
+        print(f"  decided by (W-D-L): {decided_line([(r[4], r[6]) for r in results.values() if r[0] == me and r[1] == opp])}")
     if args.baseline:
         score = {"win": 1.0, "draw": 0.5, "loss": 0.0}
         fixtures = defaultdict(dict)
