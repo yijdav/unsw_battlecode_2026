@@ -12,6 +12,7 @@ RUNNER = r'''
 import json, os, resource, shutil, subprocess, sys, threading
 bots, j, sandbox, cache, *_opt = json.loads(sys.stdin.readline())
 lite = bool(_opt and _opt[0])
+decode = bool(len(_opt) > 1 and _opt[1]) and not lite and os.path.exists("decode.py")
 _s, _h = resource.getrlimit(resource.RLIMIT_NOFILE)
 for _n in (65536, 32768, 16384, 10240, 4096):
     try:
@@ -36,6 +37,12 @@ def worker():
         i, mp, a, b, seed, out = json.loads(line)
         r = subprocess.run(cmd([mp, a, b, "--seed", str(seed)] + (["--no-replay"] if lite else ["-o", out]) + ["--no-logs"]), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, errors="replace")
         text = r.stdout[-1500:] + ("" if "wins after" in r.stdout or "draw after" in r.stdout else "\nSTDERR " + r.stderr[-800:])
+        if decode and os.path.exists(out):
+            d = subprocess.run(["nice", "-n", "10", sys.executable, "decode.py", out], stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+            if d.returncode == 0 and d.stdout.strip():
+                with open(out + ".json", "w") as f:
+                    f.write(d.stdout)
+                os.remove(out)
         if lite:
             text = next((ln for ln in text.splitlines() if "wins after" in ln or "draw after" in ln), text[-300:])
         with lock_out:
@@ -158,7 +165,7 @@ def bot_key(bot):
     return f"{safe(bot)}-{h.hexdigest()[:12]}"
 
 
-def sync(host, ws, bots, maps=None):
+def sync(host, ws, bots, maps=None, decode=False):
     host.cache = {b: bot_key(b) for b in dict.fromkeys(bots)}
     keys = " ".join(host.cache.values())
     r = ssh(host, f"mkdir -p bc/cache && cd bc/cache && for k in {keys}; do [ -d $k ] && touch $k && echo $k; done; "
@@ -178,6 +185,8 @@ def sync(host, ws, bots, maps=None):
             wanted = sorted({*maps, ROOT / "maps" / "arena.map"} & set(wanted))
         for path in wanted:
             tar.add(path, arcname=f"runs/{ws.split('/')[-1]}/{path.relative_to(ROOT)}", recursive=False)
+        if decode and not host.lite:
+            tar.add(ROOT / "tools" / "replay" / "decode.py", arcname=f"runs/{ws.split('/')[-1]}/decode.py", recursive=False)
     links = " && ".join(f"ln -sfn ~/bc/cache/{k} {ws}/{b}" for b, k in host.cache.items())
     run_dir = ws.split("/")[-1]
     r = ssh(host, f"mkdir -p bc/runs/{run_dir} && tar -x -C bc -f - && mkdir -p {ws}/replays/arena && {links}", input=buf.getvalue())
@@ -188,7 +197,7 @@ def fetch(host, ws):
     if host.lite:
         ssh(host, f"rm -rf {ws}")
         return
-    r = ssh(host, f"cd {ws} && tar -c replays && cd && rm -rf {ws}")
+    r = ssh(host, f"cd {ws} && tar -c replays | gzip -1 && cd && rm -rf {ws}")
     if r.returncode == 0 and r.stdout:
         with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tar:
             tar.extractall(ROOT, filter="data")
@@ -211,6 +220,7 @@ def main():
     ap.add_argument("--extra-opps", nargs="*")
     ap.add_argument("--resume", action="store_true", help="keep the games already in <dump>.partial and play only the rest")
     ap.add_argument("--deadline", type=float, default=0, help="unix time after which no new local game is started")
+    ap.add_argument("--remote-decode", action="store_true", help="decode replays on the remote machines and fetch <replay>.json instead")
     args = ap.parse_args()
 
     maps = []
@@ -246,7 +256,7 @@ def main():
         if r.j <= 0:
             continue
         r.ws = f"bc/runs/{uuid.uuid4().hex[:12]}"
-        if sync(r, r.ws, bots, maps):
+        if sync(r, r.ws, bots, maps, args.remote_decode):
             remotes.append(r)
         else:
             print(f"remote {r.name} unreachable, skipping it", file=sys.stderr)
@@ -294,7 +304,7 @@ def main():
         return json.dumps([i, str(mp.relative_to(ROOT)), a, b, seed, str(replay_path(mp, a, b, seed))]) + "\n"
 
     def run_remote(r):
-        header = json.dumps([bots, r.j, args.sandbox, r.cache, r.lite])
+        header = json.dumps([bots, r.j, args.sandbox, r.cache, r.lite, args.remote_decode])
         command = f"cd {r.ws} && python3 -c {shlex.quote(BOOT)}"
         for mux in ([True, False] if r.mux else [False]):
             got = 0

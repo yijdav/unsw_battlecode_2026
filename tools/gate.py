@@ -43,7 +43,7 @@ def sign_p(g, l):
     return min(1.0, 2 * sum(math.comb(n, x) for x in range(min(g, l) + 1)) / 2 ** n)
 
 
-def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
+def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None, keep=False):
     first = SETS[fset][1]
     maps = maps or SETS[fset][0]
     for suffix in ("", ".partial", ".cpu") if not resume else ("",):
@@ -51,7 +51,7 @@ def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
     cmd = [sys.executable, str(ROOT / "tools" / "arena_dump.py"), bot, *opps, "--maps", *maps, "--first-seed", str(first),
            "--sandbox", "-j", str(j), "--dump", str(out)] + (["--resume"] if resume else []) + (["--deadline", str(deadline)] if deadline else [])
     if remote:
-        cmd += ["--remote", remote]
+        cmd += ["--remote", remote] + ([] if keep else ["--remote-decode"])
     subprocess.run(cmd, cwd=ROOT, check=True)
     rows = json.load(open(out))
     missing = sum(1 for r in rows if r[5] == "error")
@@ -72,7 +72,8 @@ def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
 def decode_one(args):
     path, side = args
     try:
-        d = decode(path)
+        pre = Path(path + ".json")
+        d = json.loads(pre.read_text()) if pre.exists() else decode(path)
     except Exception as e:
         return {"error": str(e)}
     other = "B" if side == "A" else "A"
@@ -90,6 +91,7 @@ def metrics_for(rows, j, keep):
     if not keep:
         for p, _ in jobs:
             Path(p).unlink(missing_ok=True)
+            Path(p + ".json").unlink(missing_ok=True)
     return got
 
 
@@ -109,7 +111,7 @@ def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
         if spec is not None and resume and bgames.exists():
             table += [json.loads(line) for line in open(bgames)]
             continue
-        rows, cpu = run_games(bot, opps, fset, bout, j, remote, resume, deadline, None if spec is None else [spec])
+        rows, cpu = run_games(bot, opps, fset, bout, j, remote, resume, deadline, None if spec is None else [spec], keep)
         mets = metrics_for(rows, dj, keep)
         part = []
         for row, m in zip(rows, mets):
