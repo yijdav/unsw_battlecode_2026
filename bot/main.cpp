@@ -249,6 +249,7 @@ struct Knobs {
     double q_sarea_w = 200;
     int q_sdepth = 2;
     int q_eat_from = 0;
+    bool q_detect_all = false;
 } K;
 
 int W, H, N;
@@ -382,7 +383,8 @@ void apply_map_knobs() {
 int q_prior_state = 0;
 int q_board = -1;
 bool q_prior_merged = false;
-void q_prior_check(std::vector<unswbc::Tile> const& tiles) {
+bool board_on() { return K.q_maps == 0 || q_prior_state == 0 || (q_prior_state == 2 ? (K.q_maps >> 30 & 1) : (K.q_maps >> q_board & 1)); }
+void q_prior_check(std::vector<unswbc::Tile> const& tiles, bool apply) {
     QPrior const* hit = nullptr;
     int hits = 0;
     std::vector<QPrior const*> all;
@@ -404,7 +406,7 @@ void q_prior_check(std::vector<unswbc::Tile> const& tiles) {
     }
     if (hits == 0) { q_prior_state = 2; return; }
     if (hits > 1) {
-        if (q_prior_merged) return;
+        if (q_prior_merged || !apply) return;
         q_prior_merged = true;
         for (int c = 0; c < N; ++c)
             for (int o = 0; o < 2; ++o) {
@@ -417,6 +419,7 @@ void q_prior_check(std::vector<unswbc::Tile> const& tiles) {
     }
     q_prior_state = 1;
     q_board = int(hit - &QPRIORS[0]);
+    if (!apply || (K.q_detect_all && !board_on())) return;
     for (int c = 0; c < N; ++c) { edge_n[c] = uint8_t(hit->edges[2 * c] - '0'); edge_w[c] = uint8_t(hit->edges[2 * c + 1] - '0'); }
     for (auto const& pt : hit->ports) {
         bool const north = pt[2] != 0;
@@ -621,7 +624,7 @@ bool queen_alive() {
 }
 
 int champ_id() {
-    if (K.q_champ && queen_alive() && round_num >= K.q_champ_from) {
+    if (K.q_champ && queen_alive() && round_num >= K.q_champ_from && (!K.q_detect_all || board_on())) {
         if (K.q_champ == 1) return my_queen;
         int longest = 0;
         for (auto const& [id, r] : reports) if (r.round >= round_num - STALE) longest = std::max(longest, r.len);
@@ -804,8 +807,8 @@ void turn(unswbc::Controller& ct) {
     if (!prior_checked && (K.map_prior || K.open_maps || K.detect_maps || K.mapbook)) check_prior(tiles);
     if (K.map_knobs_on && !map_bit) map_bit = (W == 63 && H == 27) ? 16384 : (W == 48 && H == 24) ? 32768 : (W == 54 && H == 18) ? 65536 : 0;
     apply_map_knobs();
-    if (K.q_prior && q_prior_state == 0 && (am_queen || K.q_prior >= 2)) q_prior_check(tiles);
-    bool const qq = am_queen && (K.q_maps == 0 || q_prior_state == 0 || (q_prior_state == 2 ? (K.q_maps >> 30 & 1) : (K.q_maps >> q_board & 1)));
+    if (K.q_prior && q_prior_state == 0 && (am_queen || K.q_prior >= 2 || K.q_detect_all)) q_prior_check(tiles, am_queen || K.q_prior >= 2);
+    bool const qq = am_queen && board_on();
     sr_on = K.sprint_rule == 1 || (K.sprint_rule == 2 && qq);
     bool const qs = qq && K.q_safe > 0;
     bool const qn = qq && K.q_no_ram;
@@ -1954,7 +1957,7 @@ void turn(unswbc::Controller& ct) {
             }
         }
         for (auto const& e : enemies) if (manhattan(head, e.head) <= 1) threatened = true;
-        if (K.q_care & 16)
+        if ((K.q_care & 16) && (!K.q_detect_all || board_on()))
             for (int d = 0; d < 4; ++d) {
                 int const n = step(tail, d);
                 if (n >= 0 && occupied(n) && !occ_enemy[n] && occ_head[n] && occ_id[n] < 2 && occ_id[n] != my_id) threatened = true;
