@@ -243,6 +243,7 @@ struct Knobs {
     int q_min_n = 0;
     double q_blind = 0;
     int q_slack = 0;
+    int q_min_start = 0;
 } K;
 
 int W, H, N;
@@ -732,6 +733,7 @@ struct Rng {
 
 int waypoint = -1, waypoint_set = -1000;
 int q_nest = -1;
+int start_units = -1;
 std::vector<int> nest_d;
 void nest_bfs() {
     std::fill(nest_d.begin(), nest_d.end(), INF);
@@ -759,7 +761,8 @@ void turn(unswbc::Controller& ct) {
     int const head = cell_of(ct.get_position().x, ct.get_position().y);
     bool const am_queen = my_id < 2;
     bool const q_on = ct.get_unit_count() >= K.q_on_units && N >= K.q_min_n;
-    bool const qa = am_queen && q_on;
+    if (round_num == 0 && start_units < 0) start_units = ct.get_unit_count();
+    bool const qa = am_queen && q_on && (K.q_min_start <= 0 || start_units >= K.q_min_start);
     bool const qs = qa && K.q_safe > 0;
     bool const qn = qa && K.q_no_ram;
     bool const qm = am_queen && round_num >= K.q_split_until;
