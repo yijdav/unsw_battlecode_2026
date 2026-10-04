@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tools" / "replay"))
 from concurrent.futures import ThreadPoolExecutor
-from arena_dump import bot_key, parse, replay_path
+from arena_dump import bot_key, how_kind, parse, replay_path
 from decode import decode
 
 OPPS = ["v_base", "sb_bang", "sb_python_io", "sb_heartbreaker", "ai_like", "opp_nicked_arch4"]
@@ -17,10 +17,23 @@ SETS = {
     "holdout": (["maps/holdout:2"], 1),
     "smoke": (["maps/ladder/portals.map:1", "maps/ladder/trauma.map:1"], 1),
 }
-METRICS = ["alive_r100", "pearls_r100", "behind_portal_pearls_r100", "first_cross", "crossings_r100", "own_coll_deaths",
-           "own_coll_portal", "champ_feed_deaths", "small_head_deaths_by_enemy", "longest_feed_start", "final_longest"]
+BASE_METRICS = ["alive_r100", "pearls_r100", "behind_portal_pearls_r100", "first_cross", "crossings_r100", "own_coll_deaths",
+                "own_coll_portal", "champ_feed_deaths", "small_head_deaths_by_enemy", "longest_feed_start", "final_longest"]
+QUEEN_METRICS = ["queen_alive_end", "queen_len_end", "queen_death_round", "queen_killer_len", "queen_splits",
+                 "queen_is_longest_end", "queen_len_r100", "queen_len_r200", "queen_len_r300", "queen_len_r400",
+                 "enemy_queen_killed", "final_total", "final_queen"]
+METRICS = BASE_METRICS + QUEEN_METRICS
+DECIDED = ["elimination", "queen", "longest", "total", "draw", "length"]
 DEATHS = ["wall", "self", "body", "head", "novalid"]
 SCORE = {"win": 1.0, "draw": 0.5, "loss": 0.0}
+
+
+def toolkit_version():
+    try:
+        out = subprocess.run(["unswbc", "--version"], capture_output=True, text=True, env=dict(os.environ, UNSWBC_NO_UPDATE="1")).stdout
+    except OSError:
+        return None
+    return out.strip().split()[-1] if out.strip() else None
 
 
 def sign_p(g, l):
@@ -30,7 +43,7 @@ def sign_p(g, l):
     return min(1.0, 2 * sum(math.comb(n, x) for x in range(min(g, l) + 1)) / 2 ** n)
 
 
-def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
+def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None, keep=False):
     first = SETS[fset][1]
     maps = maps or SETS[fset][0]
     for suffix in ("", ".partial", ".cpu") if not resume else ("",):
@@ -38,7 +51,7 @@ def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
     cmd = [sys.executable, str(ROOT / "tools" / "arena_dump.py"), bot, *opps, "--maps", *maps, "--first-seed", str(first),
            "--sandbox", "-j", str(j), "--dump", str(out)] + (["--resume"] if resume else []) + (["--deadline", str(deadline)] if deadline else [])
     if remote:
-        cmd += ["--remote", remote]
+        cmd += ["--remote", remote] + ([] if keep else ["--remote-decode"])
     subprocess.run(cmd, cwd=ROOT, check=True)
     rows = json.load(open(out))
     missing = sum(1 for r in rows if r[5] == "error")
@@ -59,11 +72,12 @@ def run_games(bot, opps, fset, out, j, remote, resume, deadline=0, maps=None):
 def decode_one(args):
     path, side = args
     try:
-        d = decode(path)
+        pre = Path(path + ".json")
+        d = json.loads(pre.read_text()) if pre.exists() else decode(path)
     except Exception as e:
         return {"error": str(e)}
     other = "B" if side == "A" else "A"
-    return {"ours": d[side], "theirs": d[other], "rounds_played": d["rounds"]}
+    return {"ours": d[side], "theirs": d[other], "rounds_played": d["rounds"], "replay_decided_by": d.get("decided_by")}
 
 
 def metrics_for(rows, j, keep):
@@ -77,6 +91,7 @@ def metrics_for(rows, j, keep):
     if not keep:
         for p, _ in jobs:
             Path(p).unlink(missing_ok=True)
+            Path(p + ".json").unlink(missing_ok=True)
     return got
 
 
@@ -96,15 +111,16 @@ def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
         if spec is not None and resume and bgames.exists():
             table += [json.loads(line) for line in open(bgames)]
             continue
-        rows, cpu = run_games(bot, opps, fset, bout, j, remote, resume, deadline, None if spec is None else [spec])
+        rows, cpu = run_games(bot, opps, fset, bout, j, remote, resume, deadline, None if spec is None else [spec], keep)
         mets = metrics_for(rows, dj, keep)
         part = []
         for row, m in zip(rows, mets):
             i, me, opp, mp, side, res, rounds, how, seed = row
             c = cpu.get(i)
             peak = (c[0] if side == "A" else c[1]) if c else None
+            kind = how_kind(how)
             part.append({"i": i, "bot": me, "opp": opp, "map": mp, "side": side, "seed": seed, "res": res, "rounds": rounds,
-                         "how": how, "cpu_peak": peak, **m})
+                         "how": how, "decided_by": kind if kind != "error" else m.get("replay_decided_by"), "cpu_peak": peak, **m})
         if spec is not None:
             with open(bgames, "w") as f:
                 for t in part:
@@ -121,7 +137,8 @@ def base_prefix(base):
 
 
 def base_rows(fset, opps, runs, j, remote, keep, base, resume=False, dj=6):
-    key = json.loads(json.dumps({"base": bot_key(base), "opps": {o: bot_key(o) for o in opps}, "set": SETS[fset]}))
+    key = json.loads(json.dumps({"base": bot_key(base), "opps": {o: bot_key(o) for o in opps}, "set": SETS[fset],
+                                 "toolkit": toolkit_version()}))
     pre = base_prefix(base)
     meta = runs / f"{pre}_{fset}_key.json"
     games = runs / f"{pre}_{fset}_games.jsonl"
@@ -207,6 +224,43 @@ def fmt(x):
     return "-" if x is None else (f"{x:.1f}" if isinstance(x, float) else str(x))
 
 
+def decided_of(row):
+    return row.get("decided_by") or how_kind(row.get("how"))
+
+
+def wdl(results):
+    return f"{results.count('win')}-{results.count('draw')}-{results.count('loss')}"
+
+
+def pct(xs):
+    xs = [x for x in xs if x is not None]
+    return 100.0 * sum(xs) / len(xs) if xs else None
+
+
+def median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    return float(xs[len(xs) // 2]) if xs else None
+
+
+def queen_rows():
+    rows = [("games", lambda t: len(t)),
+            ("queen alive at end %", lambda t: pct([q.get("queen_alive_end") for q in t]))]
+    for r in (100, 200, 300, 400):
+        rows.append((f"queen alive at r{r} %", lambda t, r=r: pct([None if q.get(f"queen_len_r{r}") is None else int(q[f"queen_len_r{r}"] > 0) for q in t])))
+    rows += [("queen death round, median", lambda t: median([q.get("queen_death_round") for q in t])),
+             ("queen death round, mean", lambda t: mean([q.get("queen_death_round") for q in t]))]
+    for reason in DEATHS:
+        rows.append((f"queen died: {reason} %", lambda t, reason=reason: pct([int(q.get("queen_death_reason") == reason) for q in t if "queen_death_reason" in q])))
+    rows += [("queen killed by an enemy moving into it %", lambda t: pct([int(q.get("queen_death_by") == "enemy_move") for q in t if "queen_death_by" in q])),
+             ("queen killed head-on by own move %", lambda t: pct([int(q.get("queen_death_by") == "self_move" and q.get("queen_death_reason") == "head") for q in t if "queen_death_by" in q])),
+             ("head-on killer length, median", lambda t: median([q.get("queen_killer_len") for q in t])),
+             ("killed the enemy queen by moving into it %", lambda t: pct([min(1, q["enemy_queen_killed"]) for q in t if "enemy_queen_killed" in q])),
+             ("queen is the longest at end %", lambda t: pct([q.get("queen_is_longest_end") for q in t])),
+             ("queen length at end, mean", lambda t: mean([q.get("queen_len_end") for q in t])),
+             ("queen splits, mean", lambda t: mean([q.get("queen_splits") for q in t if "queen_splits" in q]))]
+    return rows
+
+
 def report(cand, base, cname, fset, checked=None, bname="v_base"):
     checked = checked or {}
     bmap = {(r["opp"], r["map"], r["seed"], r["side"]): r for r in base}
@@ -253,21 +307,33 @@ def report(cand, base, cname, fset, checked=None, bname="v_base"):
         g, l, s, p = flips([q for q in pairs if q[0]["map"] == mp])
         if g or l:
             lines.append(f"| {mp} | {g} | {l} | {p:.3g} |")
-    lines += ["", "## Metrics per map, means per game (base -> cand)", ""]
-    lines += ["| map | side | " + " | ".join(METRICS) + " | " + " | ".join("d_" + d for d in DEATHS) + " |",
-              "|" + "---|" * (len(METRICS) + len(DEATHS) + 2)]
+    lines += ["", "## Decided by (W-D-L)", "", "| decided by | cand W-D-L | base W-D-L |", "|---|---|---|"]
+    for kind in DECIDED + ["error"]:
+        c = [r["res"] for r, _ in pairs if decided_of(r) == kind]
+        b = [b["res"] for _, b in pairs if decided_of(b) == kind]
+        if c or b:
+            lines.append(f"| {kind} | {wdl(c)} | {wdl(b)} |")
+    lines += ["", "## Queen survival (ours = the tested bot, theirs = its opponents)", "",
+              "| metric | base ours | cand ours | base theirs | cand theirs |", "|---|---|---|---|---|"]
+    teams = [[x[who] for x in sel if who in x] for who in ("ours", "theirs") for sel in ([b for _, b in pairs], [r for r, _ in pairs])]
+    for name, fn in queen_rows():
+        lines.append(f"| {name} | " + " | ".join(fmt(fn(t)) for t in teams) + " |")
 
-    def mrow(sel, who):
-        vals = [mean([r[who][k] for r in sel if who in r]) for k in METRICS]
-        return vals + [mean([r[who]["deaths"][d] for r in sel if who in r]) for d in DEATHS]
+    def mrow(sel, who, keys, deaths):
+        vals = [mean([r[who].get(k) for r in sel if who in r]) for k in keys]
+        return vals + ([mean([r[who]["deaths"][d] for r in sel if who in r]) for d in DEATHS] if deaths else [])
 
     maps = sorted({p[0]["map"] for p in pairs if not p[0]["map"].startswith(("generated/", "portal_heavy/"))})
-    for mp in maps + ["ALL"]:
-        cs = [r for r, _ in pairs if mp == "ALL" or r["map"] == mp]
-        bs = [b for _, b in pairs if mp == "ALL" or b["map"] == mp]
-        for who in ("ours", "theirs"):
-            cells = [f"{fmt(x)}->{fmt(y)}" for x, y in zip(mrow(bs, who), mrow(cs, who))]
-            lines.append(f"| {mp} | {who} | " + " | ".join(cells) + " |")
+    for title, keys, deaths in (("Metrics per map", BASE_METRICS, True), ("Queen metrics per map", QUEEN_METRICS, False)):
+        lines += ["", f"## {title}, means per game (base -> cand)", ""]
+        lines += ["| map | side | " + " | ".join(keys) + (" | " + " | ".join("d_" + d for d in DEATHS) if deaths else "") + " |",
+                  "|" + "---|" * (len(keys) + (len(DEATHS) if deaths else 0) + 2)]
+        for mp in maps + ["ALL"]:
+            cs = [r for r, _ in pairs if mp == "ALL" or r["map"] == mp]
+            bs = [b for _, b in pairs if mp == "ALL" or b["map"] == mp]
+            for who in ("ours", "theirs"):
+                cells = [f"{fmt(x)}->{fmt(y)}" for x, y in zip(mrow(bs, who, keys, deaths), mrow(cs, who, keys, deaths))]
+                lines.append(f"| {mp} | {who} | " + " | ".join(cells) + " |")
     cpu_c = max((r["cpu_peak"] or 0) for r in cand) if cand else 0
     cpu_b = max((r["cpu_peak"] or 0) for r in base) if base else 0
     nv_c = mean([r["ours"]["deaths"]["novalid"] for r, _ in pairs if "ours" in r])
