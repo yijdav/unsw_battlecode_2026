@@ -236,6 +236,7 @@ struct Knobs {
     int un64_feed_start = 0;
     int mz_feed_start = 350;
     bool board_log = false;
+    int board_ev = 2;
     bool fx_relay = false;
     int fx_stale = 0;
     bool fx_tomb = false;
@@ -402,15 +403,19 @@ void check_prior(std::vector<unswbc::Tile> const& tiles) {
 }
 
 int board_rec = 0, board_cand = -1;
+int board_ev[8] = {};
 void board_check(std::vector<unswbc::Tile> const& tiles) {
     if (board_cand == 0) return;
     if (board_cand < 0) {
         board_cand = 0;
         for (auto const& b : BOARDS) if (b.w == W && b.h == H) board_cand |= b.bit;
     }
+    int idx = 0;
     for (auto const& b : BOARDS) {
+        int const bi = idx++;
         if (!(board_cand & b.bit)) continue;
         bool ok = true;
+        int marks = 0;
         for (int i = 0; i < VS * VS && ok; ++i) {
             auto const& t = tiles[i];
             int c = cell_of(t.get_position().x, t.get_position().y);
@@ -419,12 +424,18 @@ void board_check(std::vector<unswbc::Tile> const& tiles) {
                 int kind = e.get_edge_type() == unswbc::EdgeType::KELP ? 1 : e.is_portal() ? 2 : 0;
                 bool north;
                 int const key = edge_key(c, d, north);
-                if (b.edges[2 * key + (north ? 0 : 1)] - '0' != kind) ok = false;
+                int const want = b.edges[2 * key + (north ? 0 : 1)] - '0';
+                if (want != kind) ok = false;
+                else if (want) ++marks;
             }
         }
         if (!ok) board_cand &= ~b.bit;
+        else if (marks >= K.board_ev && bi < 8) ++board_ev[bi];
     }
-    if (board_cand && !(board_cand & (board_cand - 1))) { board_rec = board_cand; board_cand = 0; }
+    if (board_cand && !(board_cand & (board_cand - 1))) {
+        int i = 0;
+        for (auto const& b : BOARDS) { if (b.bit == board_cand && i < 8 && board_ev[i] > 0) { board_rec = board_cand; board_cand = 0; } ++i; }
+    }
 }
 int big_bits() {
     if (W == 64 && H == 64) return board_rec == 1 ? 1 : board_rec == 2 ? 2 : 4;
