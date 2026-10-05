@@ -250,6 +250,7 @@ struct Knobs {
     int q_sdepth = 2;
     int q_eat_from = 0;
     bool q_detect_all = false;
+    bool q_gate_all = false;
 } K;
 
 int W, H, N;
@@ -384,6 +385,7 @@ int q_prior_state = 0;
 int q_board = -1;
 bool q_prior_merged = false;
 bool board_on() { return K.q_maps == 0 || q_prior_state == 0 || (q_prior_state == 2 ? (K.q_maps >> 30 & 1) : (K.q_maps >> q_board & 1)); }
+bool q_champ_on() { return K.q_champ && (!K.q_gate_all || board_on()); }
 void q_prior_check(std::vector<unswbc::Tile> const& tiles, bool apply) {
     QPrior const* hit = nullptr;
     int hits = 0;
@@ -993,7 +995,7 @@ void turn(unswbc::Controller& ct) {
     }
     foe_queen = my_queen < 0 ? -1 : 1 - my_queen;
     if (K.q_log) ct.output_log("Q", int(am_queen), my_queen, int(queen_known));
-    if (K.q_champ && K.q_feed_start > 0 && queen_alive()) {
+    if (q_champ_on() && K.q_feed_start > 0 && queen_alive()) {
         feed_start = K.q_feed_start;
         feed_phase = round_num >= feed_start;
     }
@@ -1065,7 +1067,7 @@ void turn(unswbc::Controller& ct) {
     bool const guard = guard_head >= 0;
 
     bool feed_blocked = false;
-    if (K.feed_guard && champ_visible && !(K.q_feed_long && K.q_champ && (champ == 0 || champ == 1))) {
+    if (K.feed_guard && champ_visible && !(K.q_feed_long && q_champ_on() && (champ == 0 || champ == 1))) {
         int const vis = seg_count[champ];
         int const clen = partial.count(champ) ? std::max(vis, reports[champ].len) : vis;
         if (clen < L + K.feed_margin) feed_blocked = true;
@@ -1073,7 +1075,7 @@ void turn(unswbc::Controller& ct) {
         if (K.feed_self_frac > 0 && L >= 6 && L > K.feed_self_frac * clen) feed_blocked = true;
     }
     if (K.feed_min_units > 0 && ct.get_unit_count() < K.feed_min_units) feed_blocked = true;
-    if (feed_phase && !am_champion && !qn && !qc_feed && !(am_queen && K.q_champ) && champ_visible && !feed_blocked && hunt < 0 && !guard && round_num <= K.feed_last_round &&
+    if (feed_phase && !am_champion && !qn && !qc_feed && !(am_queen && q_champ_on()) && champ_visible && !feed_blocked && hunt < 0 && !guard && round_num <= K.feed_last_round &&
         chebyshev(head, champ_head) <= 2) {
         if (K.crowd_reach > 0) bfs(champ_head, 0, N);
         int near = 0;
@@ -2056,7 +2058,7 @@ sonar:
         uint64_t best_msg = b >= 0 ? encode(b, reports[b]) : mine;
         uint64_t enemy_msg = K.q_hunt_report && q_sight_fresh() ? encode(FOE_QUEEN_ID, q_sight) : sighting_fresh() ? encode(ENEMY_ID, sighting) : best_msg;
         uint64_t queen_msg = best_msg;
-        if (K.q_champ) {
+        if (q_champ_on()) {
             auto const q = reports.find(my_queen);
             if (q != reports.end() && q->second.len > 0 && q->second.round >= round_num - STALE) queen_msg = encode(my_queen, q->second);
         }
