@@ -220,6 +220,8 @@ struct Knobs {
     double q_hunt_w = 0;
     bool q_hunt_report = false;
     int q_hunt_age = 16;
+    int q_hunt_hold = 0;
+    int q_hunt_far = 0;
     double q_land = 0;
     int q_hunt_units = 2;
     int q_min_units = 0;
@@ -561,7 +563,7 @@ Report sighting{0, -1, -1000};
 bool sighting_fresh() { return sighting.cell >= 0 && sighting.round >= round_num - 12; }
 constexpr int FOE_QUEEN_ID = 4094;
 Report q_sight{0, -1, -1000};
-bool q_sight_fresh() { return q_sight.cell >= 0 && q_sight.round >= round_num - K.q_hunt_age; }
+bool q_sight_fresh() { return q_sight.cell >= 0 && q_sight.round >= round_num - std::max(K.q_hunt_age, K.q_hunt_hold); }
 
 std::deque<int> history;
 
@@ -1170,9 +1172,9 @@ void turn(unswbc::Controller& ct) {
     std::vector<double> areas(4, 0);
     int q_cell = -1;
     double q_pull = 0;
-    if (qh && K.q_hunt_w > 0 && !am_champion && q_sight_fresh() && manhattan(head, q_sight.cell) <= K.hunt_radius) {
+    if (qh && K.q_hunt_w > 0 && !am_champion && q_sight_fresh() && manhattan(head, q_sight.cell) <= (K.q_hunt_far > 0 ? K.q_hunt_far : K.hunt_radius)) {
         q_cell = q_sight.cell;
-        q_pull = K.q_hunt_w * decay[std::min(round_num - q_sight.round + 1, 255)];
+        q_pull = K.q_hunt_w * (K.q_hunt_hold > 0 ? 1.0 : decay[std::min(round_num - q_sight.round + 1, 255)]);
     }
     auto is_trap = [&](int area, int eff_len) {
         bool const roomy = K.cycle_test ? (bfs_cycle && area >= 2 * eff_len + 4) : area >= std::max(2 * eff_len, 16);
