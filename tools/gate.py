@@ -400,8 +400,8 @@ def main():
     default_opps = SET_OPPS.get(args.set, OPPS)
     named = args.opps[0] if args.opps and len(args.opps) == 1 and args.opps[0] in OPP_LISTS else None
     opps = OPP_LISTS[named] if named else (args.opps or default_opps)
-    if opps != default_opps:
-        label = f"{args.set}_{named or 'custom'}"
+    if named and opps != default_opps:
+        label = f"{args.set}_{named}"
         SETS[label] = SETS[args.set]
         args.set = label
     args.opps = opps
