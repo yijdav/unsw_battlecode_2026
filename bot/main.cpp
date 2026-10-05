@@ -267,6 +267,7 @@ struct Knobs {
     int kb_from = 0;
     int kb_maps = 0;
     bool kb_best = false;
+    bool ce_hist = false;
     int fsp_len = 0;
     int fsp_steps = 2;
     double fsp_margin = 2;
@@ -2184,6 +2185,8 @@ void turn(unswbc::Controller& ct) {
                     for (size_t j = 1; j < best_path.size(); ++j)
                         for (int d = 0; d < 4; ++d) if (step(c, d) == best_path[j]) { mv.push_back(DIRS[d]); c = best_path[j]; break; }
                     if (mv.size() == best_path.size()) {
+                        if (K.ce_hist)
+                            for (size_t j = 0; j + 1 < best_path.size(); ++j) history.push_front(best_path[j]);
                         ct.make_moves(mv);
                         ct.set_indicator_string("CE");
                         goto sonar;
