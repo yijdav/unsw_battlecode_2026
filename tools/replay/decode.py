@@ -244,7 +244,12 @@ def team_stats():
             'champ_own_drop': [0] * 10, 'queen_id': None, 'queen_alive_end': None, 'queen_len_end': None,
             'queen_death_round': None, 'queen_death_reason': None, 'queen_death_by': None, 'queen_killer_len': None,
             'queen_splits': 0, 'queen_is_longest_end': None, **{f'queen_len_r{r}': None for r in QUEEN_SNAPS},
-            'enemy_queen_killed': 0, 'final_total': None, 'final_queen': None}
+            'enemy_queen_killed': 0, 'final_total': None, 'final_queen': None,
+            'mv_turns': [0] * 4, 'mv_multi': [0] * 4, 'mv_steps': [0] * 4, 'mv_paid': [0] * 4}
+
+
+def band(n):
+    return 0 if n <= 4 else 1 if n <= 8 else 2 if n <= 12 else 3
 
 
 def decided(winner, end_reason, a, b):
@@ -352,6 +357,15 @@ def decode(path):
             did = msg.i32(p, 0)
             act = msg.sptr(p, 0)
             dirs = msg.u16s(msg.sptr(act, 0)) if act and msg.u16(act, 0) == 0 else []
+            if did in team and did in body:
+                n = len(body[did])
+                mt = st[team[did]]
+                k = band(n)
+                mt['mv_turns'][k] += 1
+                mt['mv_steps'][k] += len(dirs)
+                if len(dirs) >= 2:
+                    mt['mv_multi'][k] += 1
+                    mt['mv_paid'][k] += max(0, len(dirs) - (n + 3) // 4)
             usage = msg.sptr(p, 1)
             if usage and did in team:
                 cpu[team[did]].append(msg.u64(usage, 0))
