@@ -10,6 +10,8 @@ from arena_dump import bot_key, how_kind, parse, replay_path
 from decode import decode
 
 OPPS = ["v_base", "sb_bang", "sb_python_io", "sb_heartbreaker", "ai_like", "opp_nicked_arch4"]
+QAWARE = ["sq_hide", "sq_hunt", "sq_bot", "opp_nicked_arch4"]
+OPP_LISTS = {"default": OPPS, "qaware": QAWARE}
 ARCH = "opp_nicked_arch4"
 L17_ONE = ["australia", "autarky", "default", "islands", "maze", "portals", "stripes", "tower", "trauma", "trophy", "unsw", "weakhold"]
 L17_TWO = ["devil", "devil_f", "dilemma", "dilemma10", "qos", "qos_e", "school", "school_k", "slithery", "slithery_x"]
@@ -27,7 +29,9 @@ SETS = {
     "main_old": (["maps/ladder:3", "maps/generated:2", "maps/portal_heavy:2"], 1),
     "fresh_old": (["maps/ladder:6"], 4),
     "smoke": (["maps/ladder/portals.map:1", "maps/ladder/trauma.map:1"], 1),
+    "qaware": (ladder17("ladder17", 1), 1),
 }
+SET_OPPS = {"qaware": QAWARE}
 BASE_METRICS = ["alive_r100", "pearls_r100", "behind_portal_pearls_r100", "first_cross", "crossings_r100", "own_coll_deaths",
                 "own_coll_portal", "champ_feed_deaths", "small_head_deaths_by_enemy", "longest_feed_start", "final_longest"]
 QUEEN_METRICS = ["queen_alive_end", "queen_len_end", "queen_death_round", "queen_killer_len", "queen_splits",
@@ -140,6 +144,9 @@ def collect(bot, fset, opps, runs, tag, j, remote, keep, resume=False, dj=6):
     with open(runs / f"{tag}_{fset}_games.jsonl", "w") as f:
         for t in table:
             f.write(json.dumps(t) + "\n")
+    lost = sum(1 for t in table if "error" in t)
+    if lost:
+        print(f"warning: {lost} of {len(table)} games have no decoded replay (metrics missing; a remote fetch probably failed)", file=sys.stderr)
     return table
 
 
@@ -389,7 +396,7 @@ def main():
     ap.add_argument("candidate")
     ap.add_argument("--tag")
     ap.add_argument("--set", default="main")
-    ap.add_argument("--opps", nargs="*", default=OPPS)
+    ap.add_argument("--opps", nargs="*", help="opponent folders, or one list name: " + ", ".join(OPP_LISTS))
     ap.add_argument("--base", default="v_base")
     ap.add_argument("--runs", default="runs")
     ap.add_argument("-j", type=int, default=8)
@@ -401,11 +408,20 @@ def main():
     ap.add_argument("--no-verify", action="store_true")
     ap.add_argument("--maps", nargs="*", help="custom fixture set, e.g. maps/ladder/trophy.map:40; named by --set")
     ap.add_argument("--first-seed", type=int, default=1)
+    ap.add_argument("--base-only", action="store_true", help="only play (or load) the cached base rows for this set and opponents")
     args = ap.parse_args()
     if args.maps:
         SETS[args.set] = (args.maps, args.first_seed)
     if args.set not in SETS:
         ap.error(f"unknown set {args.set}; give --maps to define it")
+    default_opps = SET_OPPS.get(args.set, OPPS)
+    named = args.opps[0] if args.opps and len(args.opps) == 1 and args.opps[0] in OPP_LISTS else None
+    opps = OPP_LISTS[named] if named else (args.opps or default_opps)
+    if named and opps != default_opps:
+        label = f"{args.set}_{named}"
+        SETS[label] = SETS[args.set]
+        args.set = label
+    args.opps = opps
     runs = ROOT / args.runs
     runs.mkdir(parents=True, exist_ok=True)
     tag = args.tag or args.candidate
@@ -414,6 +430,9 @@ def main():
         cand = [json.loads(x) for x in open(runs / f"{tag}_{args.set}_games.jsonl")]
     else:
         base = base_rows(args.set, args.opps, runs, args.j, args.remote, args.keep_replays, args.base, args.resume, args.decode_j)
+        if args.base_only:
+            print(f"base {args.base} on {args.set}: {len(base)} rows vs {', '.join(args.opps)} in {runs}")
+            return
         cand = collect(args.candidate, args.set, args.opps, runs, tag, args.j, args.remote, args.keep_replays, args.resume, args.decode_j)
     checked = {} if args.no_verify else verify(cand, base, args.candidate, args.base, runs / f"{tag}_{args.set}_verify.jsonl", args.j, args.set)
     text, ok = report(cand, base, args.candidate, args.set, checked, args.base)
