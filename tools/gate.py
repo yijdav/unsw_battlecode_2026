@@ -330,6 +330,23 @@ def report(cand, base, cname, fset, checked=None, bname="v_base"):
     for name, fn in queen_rows():
         lines.append(f"| {name} | " + " | ".join(fmt(fn(t)) for t in teams) + " |")
 
+    lines += ["", "## Movement (multi-step moves per 100 dragon-turns by length band, steps per turn, paid steps per 100 turns)", "",
+              "| team | rows | L2-4 | L5-8 | L9-12 | L13+ | steps/turn L5+ | paid/100 L5+ | pearls/game | final longest |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for label, sel, who in (("base ours", [b for _, b in pairs], "ours"), ("cand ours", [r for r, _ in pairs], "ours"),
+                            ("base theirs", [b for _, b in pairs], "theirs"), ("cand theirs", [r for r, _ in pairs], "theirs")):
+        got = [x[who] for x in sel if who in x and "mv_turns" in x[who]]
+        cells = []
+        for k in range(4):
+            t = sum(g["mv_turns"][k] for g in got)
+            cells.append(fmt(100.0 * sum(g["mv_multi"][k] for g in got) / t) if t else "-")
+        t5 = sum(sum(g["mv_turns"][1:]) for g in got)
+        cells.append(fmt(sum(sum(g["mv_steps"][1:]) for g in got) / t5) if t5 else "-")
+        cells.append(fmt(100.0 * sum(sum(g["mv_paid"][1:]) for g in got) / t5) if t5 else "-")
+        allg = [x[who] for x in sel if who in x]
+        cells.append(fmt(mean([(g.get("pearls_spawn") or 0) + (g.get("pearls_drop") or 0) for g in allg])))
+        cells.append(fmt(mean([g.get("final_longest") for g in allg])))
+        lines.append(f"| {label} | {len(got)} | " + " | ".join(cells) + " |")
+
     def mrow(sel, who, keys, deaths):
         vals = [mean([r[who].get(k) for r in sel if who in r]) for k in keys]
         return vals + ([mean([r[who]["deaths"][d] for r in sel if who in r]) for d in DEATHS] if deaths else [])

@@ -118,6 +118,8 @@ def warm(bot, sandbox):
 
 class Remote:
     def __init__(self, spec, default_j):
+        self.runs_only = spec.startswith("runs:")
+        spec = spec[5:] if self.runs_only else spec
         self.lite = spec.startswith("lite:")
         spec = spec[5:] if self.lite else spec
         self.wsl = spec.startswith("wsl:")
@@ -165,7 +167,29 @@ def bot_key(bot):
     return f"{safe(bot)}-{h.hexdigest()[:12]}"
 
 
+def sync_runs_only(host, ws, bots, maps=None, decode=False):
+    host.cache = {b: bot_key(b) for b in dict.fromkeys(bots)}
+    run_dir = ws.split("/")[-1]
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for b, k in host.cache.items():
+            for path in bot_files(b):
+                tar.add(path, arcname=f"runs/{run_dir}/bots/{k}/{path.relative_to(ROOT / b)}".rstrip("/."), recursive=False)
+        wanted = [ROOT / "maps", *sorted((ROOT / "maps").rglob("*"))]
+        if host.lite and maps is not None:
+            wanted = sorted({*maps, ROOT / "maps" / "arena.map"} & set(wanted))
+        for path in wanted:
+            tar.add(path, arcname=f"runs/{run_dir}/{path.relative_to(ROOT)}", recursive=False)
+        if decode and not host.lite:
+            tar.add(ROOT / "tools" / "replay" / "decode.py", arcname=f"runs/{run_dir}/decode.py", recursive=False)
+    links = " && ".join(f"ln -sfn ~/{ws}/bots/{k} {ws}/{b}" for b, k in host.cache.items())
+    r = ssh(host, f"mkdir -p bc/runs/{run_dir} && tar -x -C bc -f - && mkdir -p {ws}/replays/arena && {links}", input=buf.getvalue())
+    return r.returncode == 0
+
+
 def sync(host, ws, bots, maps=None, decode=False):
+    if host.runs_only:
+        return sync_runs_only(host, ws, bots, maps, decode)
     host.cache = {b: bot_key(b) for b in dict.fromkeys(bots)}
     keys = " ".join(host.cache.values())
     r = ssh(host, f"mkdir -p bc/cache && cd bc/cache && for k in {keys}; do [ -d $k ] && touch $k && echo $k; done; "
@@ -304,7 +328,7 @@ def main():
         return json.dumps([i, str(mp.relative_to(ROOT)), a, b, seed, str(replay_path(mp, a, b, seed))]) + "\n"
 
     def run_remote(r):
-        header = json.dumps([bots, r.j, args.sandbox, r.cache, r.lite, args.remote_decode])
+        header = json.dumps([bots, r.j, args.sandbox, {} if r.runs_only else r.cache, r.lite, args.remote_decode])
         command = f"cd {r.ws} && python3 -c {shlex.quote(BOOT)}"
         for mux in ([True, False] if r.mux else [False]):
             got = 0
