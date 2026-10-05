@@ -268,6 +268,7 @@ struct Knobs {
     int kb_maps = 0;
     bool kb_best = false;
     bool ce_hist = false;
+    int q_skip_maps = 0;
     int fsp_len = 0;
     int fsp_steps = 2;
     double fsp_margin = 2;
@@ -840,7 +841,7 @@ void turn(unswbc::Controller& ct) {
     auto const& tiles = ct.get_tiles();
     int const head = cell_of(ct.get_position().x, ct.get_position().y);
     bool const am_queen = my_id < 2;
-    bool const q_on = ct.get_unit_count() >= K.q_on_units && N >= K.q_min_n;
+    bool const q_on = ct.get_unit_count() >= K.q_on_units && N >= K.q_min_n && !(K.q_skip_maps && (big_bits() & K.q_skip_maps));
     if (round_num == 0 && start_units < 0) start_units = ct.get_unit_count();
     bool const qa = am_queen && q_on && (K.q_min_start <= 0 || start_units >= K.q_min_start);
     bool const qs = qa && K.q_safe > 0;
