@@ -277,6 +277,7 @@ struct Knobs {
     bool fsp_ram = false;
     double fsp_steal = 0;
     double fsp_fog = 0;
+    int fsp_queen = 0;
 } K;
 
 int W, H, N;
@@ -1563,8 +1564,8 @@ void turn(unswbc::Controller& ct) {
             int safe_exits = 0;
             for (int e = 0; e < 4; ++e) {
                 int const n = step(t, e);
-                if (n < 0 || n == head) continue;
-                if (occupied(n) && !(occ_id[n] == my_id && self_seg[n] >= L - 1)) continue;
+                if (n < 0 || n == src) continue;
+                if (occupied(n) && !(occ_id[n] == my_id && self_seg[n] >= Lv - 1)) continue;
                 bool contested = false;
                 for (int f = 0; f < 4 && !contested; ++f) {
                     int const m = step(n, f);
@@ -1795,7 +1796,15 @@ void turn(unswbc::Controller& ct) {
         return bp;
     };
     auto fsp_on = [&]() {
-        return K.fsp_len > 0 && L >= K.fsp_len && (L + 3) / 4 >= 2 && (K.fsp_champ > 0 || !am_champion) && (K.fsp_feeder || !feed_phase || am_champion);
+        return K.fsp_len > 0 && L >= K.fsp_len && (L + 3) / 4 >= 2 && (K.fsp_champ > 0 || !am_champion) && (K.fsp_feeder || !feed_phase || am_champion) &&
+               !(qa && K.fsp_queen == 1);
+    };
+    auto fsp_qok = [&](FPath const& fp) {
+        if (!qa || K.fsp_queen != 2) return true;
+        if (fp.end < 0 || fp.trap || (qd_at[fp.end] == stamp) || nest_far(fp.end)) return false;
+        for (auto const& e : enemies)
+            for (int f = 0; f < 4; ++f) if (step(e.head, f) == fp.end) return false;
+        return true;
     };
     FPath fsp_pre;
     bool fsp_done = false;
@@ -2037,7 +2046,7 @@ void turn(unswbc::Controller& ct) {
         int const bt = step(head, best.dir);
         if (bt >= 0 && !occupied(bt) && (threat(bt, pearl_seen[bt] == round_num) <= 0 || best.trap || (K.fsp_shield > 1 && best.danger))) {
             FPath const& fp = fsp_get();
-            if (fp.n >= 2 && !fp.trap && fp.end >= 0 && threat(fp.end, true) > 0 && fp.score > best.score + K.fsp_margin) {
+            if (fp.n >= 2 && !fp.trap && fp.end >= 0 && threat(fp.end, true) > 0 && fp.score > best.score + K.fsp_margin && fsp_qok(fp)) {
                 fsp_go(fp, "FE");
                 goto sonar;
             }
@@ -2203,7 +2212,7 @@ void turn(unswbc::Controller& ct) {
         if (bt >= 0 && !occupied(bt)) {
             FPath const& fp = fsp_get();
             bool const cok = !am_champion || K.fsp_champ != 2 || fp.bank > 0 || threat(bt, pearl_seen[bt] == round_num) <= 1;
-            if (cok && fp.n >= 2 && fp.score > best.score + K.fsp_margin) {
+            if (cok && fp.n >= 2 && fp.score > best.score + K.fsp_margin && fsp_qok(fp)) {
                 fsp_go(fp, "FS");
                 goto sonar;
             }
